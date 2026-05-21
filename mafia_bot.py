@@ -1,13 +1,12 @@
-import sys
-sys.path.insert(0, r"D:\pylibs")
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+import os
 import random
 import logging
 from typing import Dict, Optional
 
-TOKEN = "8388604050:AAFLH3sa6kIbg3YuuiLGMp1VBJT0JT2X9vg"
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
+
+TOKEN = os.getenv("BOT_TOKEN", "8388604050:AAFLH3sa6kIbg3YuuiLGMp1VBJT0JT2X9vg")
 MIN_PLAYERS = 1
 MAX_PLAYERS = 40
 
@@ -55,13 +54,6 @@ class MafiaGame:
 
     def mafia_alive_count(self):
         return len(self.mafia_players)
-
-
-def get_role_keyboard(game: MafiaGame, action: str):
-    kb = []
-    for p in game.alive_players:
-        kb.append([InlineKeyboardButton(p.name, callback_data=f"{action}:{p.user_id}")])
-    return InlineKeyboardMarkup(kb)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
