@@ -1,6 +1,8 @@
 import os, sys, random, logging, asyncio, json, time
 from typing import Dict, Optional
-sys.path.insert(0, r"D:\pylibs")
+try:
+    sys.path.insert(0, r"D:\pylibs")
+except: pass
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
