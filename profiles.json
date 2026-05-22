@@ -1,0 +1,80 @@
+{
+  "7820231987": {
+    "name": "SRPrestige",
+    "dollars": 35,
+    "olmos": 210,
+    "items": {
+      "shield": {
+        "count": 0,
+        "active": true
+      },
+      "kill_protect": {
+        "count": 0,
+        "active": true
+      },
+      "vote_protect": {
+        "count": 0,
+        "active": true
+      },
+      "rifle": {
+        "count": 0,
+        "active": true
+      },
+      "mask": {
+        "count": 0,
+        "active": true
+      },
+      "fake_doc": {
+        "count": 0,
+        "active": true
+      }
+    },
+    "games": 3,
+    "wins": 1,
+    "losses": 2,
+    "hero": true,
+    "hero_attack": 8,
+    "hero_defense": 9,
+    "evro": 0,
+    "bought_role": "Mergan"
+  },
+  "8420039043": {
+    "name": ".",
+    "dollars": 15,
+    "olmos": 195,
+    "evro": 0,
+    "items": {
+      "shield": {
+        "count": 1,
+        "active": true
+      },
+      "kill_protect": {
+        "count": 0,
+        "active": true
+      },
+      "vote_protect": {
+        "count": 0,
+        "active": true
+      },
+      "rifle": {
+        "count": 0,
+        "active": true
+      },
+      "mask": {
+        "count": 0,
+        "active": true
+      },
+      "fake_doc": {
+        "count": 0,
+        "active": true
+      }
+    },
+    "games": 1,
+    "wins": 1,
+    "losses": 0,
+    "bought_role": null,
+    "hero": false,
+    "hero_attack": 0,
+    "hero_defense": 0
+  }
+}
