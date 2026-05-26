@@ -1246,6 +1246,11 @@ async def day_phase(context, game):
         kb.append(row)
     kb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
     await send_safe(context, chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+    for p in alive:
+        try:
+            await context.bot.send_message(p.user_id, f"☀ {game.day}-kun boshlandi! Ovoz berish vaqti!\n\nGuruhda ovoz berish tugmalarini bosing yoki /vote @user")
+        except:
+            pass
     await asyncio.sleep(setts["vote"])
     await resolve_vote(context, game)
 
