@@ -76,5 +76,44 @@
     "hero": false,
     "hero_attack": 0,
     "hero_defense": 0
+  },
+  "8016126078": {
+    "name": "☾ 𝓞𝓻𝔃𝓲𝓴𝓱𝓾𝓵𝓸𝓿 ☽",
+    "dollars": 0,
+    "olmos": 10200,
+    "evro": 0,
+    "items": {
+      "shield": {
+        "count": 0,
+        "active": true
+      },
+      "kill_protect": {
+        "count": 0,
+        "active": true
+      },
+      "vote_protect": {
+        "count": 0,
+        "active": true
+      },
+      "rifle": {
+        "count": 0,
+        "active": true
+      },
+      "mask": {
+        "count": 0,
+        "active": true
+      },
+      "fake_doc": {
+        "count": 0,
+        "active": true
+      }
+    },
+    "games": 0,
+    "wins": 0,
+    "losses": 0,
+    "bought_role": null,
+    "hero": false,
+    "hero_attack": 0,
+    "hero_defense": 0
   }
 }
