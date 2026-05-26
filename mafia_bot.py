@@ -1755,6 +1755,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action_prefix = parts[1]
         day = parts[2]
         game = find_game(user_id, chat_id)
+        if not game:
+            game = find_game(user_id)
         if not game or game.phase != "night":
             await query.edit_message_text("Harakat vaqti emas!")
             return
@@ -1774,6 +1776,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         action_prefix = parts[1]
         target_id = int(parts[2])
         game = find_game(user_id, chat_id)
+        if not game:
+            game = find_game(user_id)
         if not game or game.phase != "night":
             await query.edit_message_text("Harakat vaqti emas!")
             return
@@ -1810,6 +1814,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         target_id = int(parts[2])
         game = find_game(user_id, chat_id)
+        if not game:
+            game = find_game(user_id)
         if not game:
             await query.edit_message_text("O'yinda emassiz!")
             return
