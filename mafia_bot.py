@@ -355,7 +355,7 @@ def fmt_player(p):
 async def send_safe(context, chat_id, text=None, photo=None, animation=None, caption=None, reply_markup=None, parse_mode=None):
     try:
         if animation:
-            return await context.bot.send_animation(chat_id, animation, caption=caption, parse_mode=parse_mode)
+            return await context.bot.send_animation(chat_id, animation, caption=caption, parse_mode=parse_mode, reply_markup=reply_markup)
         if photo:
             return await context.bot.send_photo(chat_id, photo, caption=caption, reply_markup=reply_markup)
         if text:
@@ -838,7 +838,10 @@ async def start_gameplay(update, context, game):
     game.day = 0
     game.phase = "night"
     game.start_time = time.time()
-    await send_safe(context, chat_id, animation=NIGHT_GIF, caption=f"🌙 *{count} o'yinchi bilan o'yin boshlandi!*\n1-tun boshlanishi...", parse_mode="Markdown")
+    bot_user = await context.bot.get_me()
+    bot_username = bot_user.username
+    start_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Botga o'tish", url=f"https://t.me/{bot_username}")]])
+    await send_safe(context, chat_id, animation=NIGHT_GIF, caption=f"🌙 *{count} o'yinchi bilan o'yin boshlandi!*\n1-tun boshlanishi...\n\nRolingizni bilish uchun botga o'ting \u2193", parse_mode="Markdown", reply_markup=start_kb)
     for p in players:
         try:
             await context.bot.send_message(p.user_id, f"Sizning rolingiz: {ROLE_ICON.get(p.role,'')} {ROLE_DISPLAY.get(p.role,p.role)}\n\n{ROLE_HELP.get(p.role,'')}")
