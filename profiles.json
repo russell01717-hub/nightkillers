@@ -36,7 +36,8 @@
     "hero_attack": 8,
     "hero_defense": 9,
     "evro": 0,
-    "bought_role": "Mergan"
+    "bought_role": "Mergan",
+    "username": ""
   },
   "8420039043": {
     "name": ".",
@@ -75,7 +76,8 @@
     "bought_role": null,
     "hero": false,
     "hero_attack": 0,
-    "hero_defense": 0
+    "hero_defense": 0,
+    "username": ""
   },
   "8016126078": {
     "name": "☾ 𝓞𝓻𝔃𝓲𝓴𝓱𝓾𝓵𝓸𝓿 ☽",
@@ -114,6 +116,7 @@
     "bought_role": null,
     "hero": false,
     "hero_attack": 0,
-    "hero_defense": 0
+    "hero_defense": 0,
+    "username": ""
   }
 }

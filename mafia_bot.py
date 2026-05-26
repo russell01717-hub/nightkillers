@@ -733,10 +733,11 @@ async def change(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if prof["olmos"] < amount:
         await update.message.reply_text("Yetarli olmos yo'q!")
         return
+    evro_amt = amount * 1000
     prof["olmos"] -= amount
-    prof["evro"] = prof.get("evro", 0) + amount
+    prof["evro"] = prof.get("evro", 0) + evro_amt
     save_profile(user.id, prof)
-    await update.message.reply_text(f"{amount} olmos -> {amount} evro")
+    await update.message.reply_text(f"{amount} olmos -> {evro_amt} evro")
 
 
 async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1248,7 +1249,16 @@ async def day_phase(context, game):
     await send_safe(context, chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
     for p in alive:
         try:
-            await context.bot.send_message(p.user_id, f"☀ {game.day}-kun boshlandi! Ovoz berish vaqti!\n\nGuruhda ovoz berish tugmalarini bosing yoki /vote @user")
+            pkb = []
+            prow = []
+            for tp in alive:
+                if tp.user_id != p.user_id:
+                    prow.append(InlineKeyboardButton(tp.display, callback_data=f"vote:{game.day}:{tp.user_id}"))
+                    if len(prow) == 2:
+                        pkb.append(prow); prow = []
+            if prow: pkb.append(prow)
+            pkb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
+            await context.bot.send_message(p.user_id, f"☀ {game.day}-kun. Ovoz berish:", reply_markup=InlineKeyboardMarkup(pkb))
         except:
             pass
     await asyncio.sleep(setts["vote"])
@@ -1843,6 +1853,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             target_id = int(parts[2])
             game = find_game(user_id, chat_id)
             if not game:
+                game = find_game(user_id)
+            if not game:
                 await query.edit_message_text("O'yinda emassiz!")
                 return
             if game.phase != "day":
@@ -1857,10 +1869,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await query.edit_message_text("Tirik emas!")
                 return
             game.votes[user_id] = target_id
-            await query.edit_message_text(f"Siz {tp.display} ga ovoz berdingiz!")
+            name = tp.first_name if not tp.username else tp.username
+            await query.edit_message_text(f"Siz {name} ga ovoz berdingiz!")
         return
     if data.startswith("vskip:"):
         game = find_game(user_id, chat_id)
+        if not game:
+            game = find_game(user_id)
         if game and game.phase == "day" and user_id not in game.votes:
             game.votes[user_id] = -1
         await query.edit_message_text("O'tkazib yuborildi.")
