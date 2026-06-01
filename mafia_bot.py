@@ -216,10 +216,11 @@ def check_flood(uid):
 
 
 class Player:
-    def __init__(self, user_id, first_name, username=None):
+    def __init__(self, user_id, first_name, username=None, is_bot=False):
         self.user_id = user_id
         self.first_name = first_name
         self.username = username
+        self.is_bot = is_bot
         self.role = None
         self.alive = True
         self.lover = None
@@ -233,6 +234,40 @@ class Player:
     @property
     def display(self):
         return f"@{self.username}" if self.username else self.first_name
+
+
+BOT_NAMES = [
+    "Azamat", "Bobur", "Dilnoza", "Eldor", "Feruza",
+    "Gulnoza", "Husan", "Ilhom", "Jamila", "Komil",
+    "Lola", "Murod", "Nigora", "Odil", "Parvin",
+    "Qadir", "Ravshan", "Sabina", "Tohir", "Umida",
+    "Valijon", "Xurshid", "Yulduz", "Zafar", "Anvar",
+    "Barno", "Davron", "Elyor", "Farhod", "Gulchehra",
+]
+bot_index: Dict[int, int] = {}
+
+BOT_DISCUSSIONS = [
+    "Menimcha bugun {} ni chiqarish kerak!",
+    "{} kechasi shubhali harakat qildi.",
+    "Nega {} hech nima demayapti?",
+    "Men {} ga ishonmayman.",
+    "{} ni ovozlari juda kam.",
+    "Kecha {} ni ko'rganman yurib.",
+    "{} mafiya bo'lishi mumkin.",
+    "Bugun {} ga ovoz beraman.",
+    "Kimdir {} ni himoya qilayapti?",
+    "{} ning harakatlari g'alati.",
+    "Men {} ni himoya qilaman, u fuqaro.",
+    "{} tushuntirib bering-chi!",
+    "{} ni chiqarib ko'ramiz, xato bo'lsa keyin.",
+    "Kechasi {} ni ko'rganman...",
+    "{} tinch aholi emas, men bilaman.",
+    "Kelinglar {} ni chiqaramiz!",
+    "{} juda jim o'tiribdi, shubhali.",
+    "Men {} ni tekshirganman, u mafiya!",
+    "{} ni ovoz bermayotgani bejiz emas.",
+    "{} haqida nima deysiz?",
+]
 
 
 class MafiaGame:
@@ -479,6 +514,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/vote @user - 🗳 Ovoz berish\n/status - 📊 Holat\n"
             "/money - 💰 Hisob\n/profile - 👤 Profil\n/shop - 🛒 Do'kon\n"
             "/top - 🏆 Top\n/hafta - 📅 Hafta reytingi\n"
+            "/addbot - 🤖 AI bot qo'shish (admin)\n"
             "/help - 📖 Yordam")
     if GAME_IMAGE:
         await send_safe(context, u.id, photo=GAME_IMAGE, caption=text)
@@ -796,6 +832,37 @@ async def geroyinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🦸 Qahramon (Hero)\n\nNarxi: 90 olmos\nImkoniyat: Hujum va himoya kuchini oshiradi\nSotib olish uchun /profile -> Hero sotib olish")
 
 
+async def addbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    if not await is_admin(update.effective_chat, user.id, context):
+        await update.message.reply_text("Faqat admin!")
+        return
+    if chat_id not in games or games[chat_id].phase != "registration":
+        await update.message.reply_text("O'yin mavjud emas!")
+        return
+    game = games[chat_id]
+    args = context.args
+    count = 1
+    if args:
+        try: count = int(args[0])
+        except: await update.message.reply_text("Son yozing! Masalan: /addbot 3"); return
+    if count < 1 or count > 10:
+        await update.message.reply_text("1-10 gacha bot qo'shishingiz mumkin!"); return
+    if len(game.players) + count > MAX_PLAYERS:
+        await update.message.reply_text(f"Ko'pi bilan {MAX_PLAYERS} o'yinchi bo'lishi mumkin!"); return
+    added = 0
+    for i in range(count):
+        bid = -(len(game.players) + i + 1)
+        bname = BOT_NAMES[(len(game.players) + i) % len(BOT_NAMES)]
+        if bname in [p.first_name for p in game.players.values()]:
+            bname += str(len(game.players) + i)
+        game.players[bid] = Player(bid, bname, is_bot=True)
+        added += 1
+    await update.message.reply_text(f"✅ {added} ta AI bot qo'shildi! Jami: {len(game.players)}/{MAX_PLAYERS}")
+    await update_game_msg(context, game)
+
+
 async def startgame(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
@@ -904,10 +971,66 @@ async def night_phase(context, game):
         await end_game(context, game)
         return
     for p in alive:
-        await send_night_actions(context, game, p)
+        if p.is_bot:
+            await auto_bot_night_action(context, game, p)
+        else:
+            await send_night_actions(context, game, p)
     setts = get_set(chat_id)
     await asyncio.sleep(setts["night"])
     await resolve_night(context, game)
+
+
+async def auto_bot_night_action(context, game, bot):
+    alive_ids = [pl.user_id for pl in game.alive_players if pl.user_id != bot.user_id]
+    if not alive_ids:
+        return
+    target = random.choice(alive_ids)
+    role = bot.role
+    atype = None
+    if role == "Don":
+        atype = "don_kill"
+    elif role == "Mafia":
+        atype = "mafia_vote"
+    elif role == "Serjant":
+        atype = "serjant_vote"
+    elif role == "Shifokor":
+        atype = "doc_heal"
+    elif role == "Manyak":
+        atype = "maniac_kill"
+    elif role == "Daydi":
+        atype = "daydi_visit"
+    elif role == "Advokat":
+        atype = "adv_protect"
+    elif role == "Bodyguard":
+        atype = "guard_protect"
+    elif role == "Oshiq":
+        atype = "oshik_visit"
+    elif role == "Aferist":
+        atype = "afer_blok"
+    elif role == "Sehrgar":
+        atype = "sehr_magic"
+    elif role == "Don xotini":
+        atype = "donx_check"
+    elif role == "Kimyogar":
+        atype = "kimyo_poison"
+    elif role == "Sotuvchi":
+        atype = "sotuv_sell"
+    elif role == "Tentak":
+        atype = "tentak_stick"
+    elif role == "Oqituvchi":
+        atype = "oqit_teach"
+    elif role == "Muxlis":
+        atype = "muxlis_watch"
+    elif role == "Mergan":
+        atype = "mergan_shoot"
+    elif role == "Majnun":
+        atype = "majnun_bond"
+    elif role == "Ubica":
+        atype = "ubica_kill"
+    elif role == "Komissar":
+        atype = random.choice(["kom_check", "kom_kill"])
+    if atype:
+        game.actions[bot.user_id] = {"type": atype, "target": target}
 
 
 async def send_night_actions(context, game, p):
@@ -1251,6 +1374,7 @@ async def day_phase(context, game):
     kb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
     await send_safe(context, chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
     for p in alive:
+        if p.is_bot: continue
         try:
             pkb = []
             prow = []
@@ -1264,8 +1388,33 @@ async def day_phase(context, game):
             await context.bot.send_message(p.user_id, f"☀ {game.day}-kun. Ovoz berish:", reply_markup=InlineKeyboardMarkup(pkb))
         except:
             pass
+    for p in alive:
+        if p.is_bot:
+            targets = [tp.user_id for tp in alive if tp.user_id != p.user_id]
+            if targets: game.votes[p.user_id] = random.choice(targets)
+    asyncio.create_task(bot_discussion(context, game))
     await asyncio.sleep(setts["vote"])
     await resolve_vote(context, game)
+
+
+async def bot_discussion(context, game):
+    bot_alive = [p for p in game.alive_players if p.is_bot]
+    if not bot_alive: return
+    chat_id = game.chat_id
+    for _ in range(random.randint(1, 3)):
+        if game.phase != "day": return
+        bot = random.choice(bot_alive)
+        phrase = random.choice(BOT_DISCUSSIONS)
+        alive_names = [p.first_name for p in game.alive_players if not p.is_bot and p.user_id != bot.user_id]
+        if alive_names:
+            name = random.choice(alive_names)
+            phrase = phrase.format(name)
+        else:
+            phrase = "Men hech kimga ishonmayman."
+        try:
+            await context.bot.send_message(chat_id, f"🤖 {bot.first_name}: {phrase}")
+        except: pass
+        await asyncio.sleep(random.randint(10, 25))
 
 
 async def resolve_vote(context, game):
@@ -1496,7 +1645,7 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/shop - Do'kon\n/geroyinfo - Qahramon\n/send @user sum - Pul\n"
         "/change sum - Olmos->Evro\n/g xabar - Ghost\n/top - Reyting\n"
         "/help - Yordam\n\nAdmin:\n/give @user sum - Olmos\n"
-        "/gsend @user sum tur - Pul berish\n/giveaway sum\n/settings\n/set"
+        "/gsend @user sum tur - Pul berish\n/giveaway sum\n/addbot son - AI bot qo'shish\n/settings\n/set"
     )
 
 
@@ -1971,6 +2120,7 @@ def main():
         ("settings", settings_cmd), ("set", set_cmd), ("setimage", setimage),
         ("money", money), ("send", send), ("give", give), ("gsend", gsend), ("change", change),
         ("giveaway", giveaway), ("shop", shop), ("profile", profile), ("geroyinfo", geroyinfo),
+        ("addbot", addbot),
     ]
     for n, h in cmds:
         app.add_handler(CommandHandler(n, h))
