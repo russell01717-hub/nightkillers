@@ -785,10 +785,14 @@ async def cmd_buy(message: Message, bot: Bot):
 
 
 async def cmd_about(message: Message, bot: Bot):
+    from mafia_bot.roles import Role, TOWN_ROLES, MAFIA_ROLES, NEUTRAL_ROLES
     await message.answer(
         "ℹ️ <b>NIGHT KILLERS</b>\n\n"
         "🌙 Eng qiziqarli Mafia o'yin boti\n"
-        "🎭 40+ xil rol\n"
+        f"🎭 <b>{len(Role)} xil rol:</b>\n"
+        f"  🟢 Shahar: {len(TOWN_ROLES)} ta\n"
+        f"  🔴 Mafia: {len(MAFIA_ROLES)} ta\n"
+        f"  🟣 Mustaqil: {len(NEUTRAL_ROLES)} ta\n"
         "🏆 Haftalik reyting va sovrinlar\n"
         "💎 Olmos va Evro iqtisod tizimi\n"
         "🦸 Hero tizimi\n\n"

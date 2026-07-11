@@ -818,11 +818,15 @@ async def show_help(callback: CallbackQuery, bot: Bot):
 
 
 async def show_about(callback: CallbackQuery, bot: Bot):
+    from mafia_bot.roles import Role, TOWN_ROLES, MAFIA_ROLES, NEUTRAL_ROLES
     await callback.answer()
     text = (
         "ℹ️ <b>NIGHT KILLERS</b>\n\n"
         "🌙 Mafia o'yin boti\n"
-        "🎭 40+ xil rol\n"
+        f"🎭 <b>{len(Role)} xil rol:</b>\n"
+        f"  🟢 Shahar: {len(TOWN_ROLES)} ta\n"
+        f"  🔴 Mafia: {len(MAFIA_ROLES)} ta\n"
+        f"  🟣 Mustaqil: {len(NEUTRAL_ROLES)} ta\n"
         "🏆 Haftalik reyting\n"
         "💎 Olmos va Evro tizimi\n\n"
         "Dasturchi: @shohnurrajabov\n"
