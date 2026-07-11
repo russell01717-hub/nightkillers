@@ -785,19 +785,23 @@ async def cmd_buy(message: Message, bot: Bot):
 
 
 async def cmd_about(message: Message, bot: Bot):
-    from mafia_bot.roles import Role, TOWN_ROLES, MAFIA_ROLES, NEUTRAL_ROLES
+    from mafia_bot.roles import Role, TOWN_ROLES, MAFIA_ROLES, NEUTRAL_ROLES, ROLE_ICON
+    town_list = ", ".join(f"{ROLE_ICON[r]} {r.value}" for r in TOWN_ROLES)
+    mafia_list = ", ".join(f"{ROLE_ICON[r]} {r.value}" for r in MAFIA_ROLES)
+    neutral_list = ", ".join(f"{ROLE_ICON[r]} {r.value}" for r in NEUTRAL_ROLES)
     await message.answer(
-        "ℹ️ <b>NIGHT KILLERS</b>\n\n"
-        "🌙 Eng qiziqarli Mafia o'yin boti\n"
-        f"🎭 <b>{len(Role)} xil rol:</b>\n"
-        f"  🟢 Shahar: {len(TOWN_ROLES)} ta\n"
-        f"  🔴 Mafia: {len(MAFIA_ROLES)} ta\n"
-        f"  🟣 Mustaqil: {len(NEUTRAL_ROLES)} ta\n"
-        "🏆 Haftalik reyting va sovrinlar\n"
-        "💎 Olmos va Evro iqtisod tizimi\n"
-        "🦸 Hero tizimi\n\n"
-        "Dasturchi: @shohnurrajabov\n"
-        "Versiya: 5.0.0",
+        f"🌙 <b>Versiya: 5.0 (aiogram 3.x)</b>\n\n"
+        f"🎭 <b>Rollar: {len(Role)} xil</b>\n"
+        f"🟢 Shahar ({len(TOWN_ROLES)}): {town_list}\n\n"
+        f"🔴 Mafia ({len(MAFIA_ROLES)}): {mafia_list}\n\n"
+        f"🟣 Mustaqil ({len(NEUTRAL_ROLES)}): {neutral_list}\n\n"
+        f"👥 Maks: 100 o'yinchi\n"
+        f"💎 Iqtisod: Olmos va Evro\n"
+        f"🦸 Hero maxsus tizimi\n"
+        f"📅 Haftalik bonus va sovrinlar\n\n"
+        f"👨‍💻 Dasturchi: @shohnurrajabov\n"
+        f"📢 Kanal: https://t.me/+HpBlh_qPFZVkMzhi\n\n"
+        f"Powered by aiogram 3.x",
         parse_mode="HTML"
     )
 

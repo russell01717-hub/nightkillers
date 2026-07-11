@@ -128,14 +128,19 @@ def get_shop_text(user_id: int) -> str:
     evro = profile.get("evro", 0)
     bought = profile.get("bought_role")
     bought_text = bought if bought else "Yo'q"
+    from .roles import TOWN_ROLES, MAFIA_ROLES, NEUTRAL_ROLES, ROLE_ICON
     lines = [
         "🛒 <b>ROLLAR DO'KONI</b>\n",
         f"💰 Hisobingiz: {olmos}💎 | {evro}💶\n",
         f"🎭 Sotib olingan rol: {bought_text}\n",
-        "\n<b>Mavjud rollar:</b>\n",
+        f"\n🎮 <b>43 xil rol mavjud:</b>\n",
+        f"🟢 Shahar: {len(TOWN_ROLES)} ta\n",
+        f"🔴 Mafia: {len(MAFIA_ROLES)} ta\n",
+        f"🟣 Mustaqil: {len(NEUTRAL_ROLES)} ta\n",
+        "\n<b>Narxlar:</b>\n",
     ]
     for role in Role:
         price = ROLE_PRICES.get(role, 0)
-        icon = "✅" if role.value == bought else "💶"
+        icon = "✅" if role.value == bought else ROLE_ICON.get(role, "❓")
         lines.append(f"{icon} {role.value} — {price}💶")
     return "\n".join(lines)
