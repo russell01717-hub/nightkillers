@@ -69,6 +69,7 @@ def register(dp, bot: Bot):
     dp.message.register(cmd_admin, Command("admin"))
     dp.message.register(cmd_achievements, Command("achievements"))
     dp.message.register(cmd_elo, Command("elo"))
+    dp.message.register(handle_photo, F.photo)
 
 
 async def is_group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -277,6 +278,18 @@ async def cmd_startgame(message: Message, bot: Bot):
         if profile.get("hero"):
             player.hero_attack = profile.get("hero_attack", 0)
             player.hero_defense = profile.get("hero_defense", 0)
+
+    # Assign Executioner target
+    for player in game.players.values():
+        if player.role == Role.EXECUTIONER:
+            targets = [p for p in game.players.values() if p.user_id != player.user_id and not p.is_bot]
+            if targets:
+                game.executioner_target = random.choice(targets).user_id
+                await safe_send_message(
+                    bot, player.user_id,
+                    f"🪓 Sizning nishoningiz: {game.get_player(game.executioner_target).display}\n"
+                    f"Uni ovoz berish orqali chiqarilishiga erishing!"
+                )
 
     game.log("roles_assigned", f"{player_count} roles distributed")
 
@@ -747,17 +760,63 @@ async def cmd_daily(message: Message, bot: Bot):
 
 async def cmd_pay(message: Message, bot: Bot):
     user = message.from_user
-    if message.chat.type == "private":
-        await message.answer(
-            f"💳 <b>To'lov</b>\n\n"
-            f"Karta: <code>{CARD_NUMBER}</code>\n"
-            f"Summa: 50💎\n\n"
-            f"To'lov qilgach, chekni rasm sifatida yuboring.\n"
-            f"Admin tasdiqlagach +50💎 hisobingizga tushadi.",
-            parse_mode="HTML"
-        )
-    else:
+    if message.chat.type != "private":
         await message.answer("ℹ️ To'lov uchun botga yozing: @Nightkillersbot")
+        return
+    args = message.text.split()
+    amount = 50
+    if len(args) > 1:
+        try:
+            amount = max(10, min(100000, int(args[1])))
+        except ValueError:
+            pass
+    text = (
+        f"💳 <b>To'lov</b>\n\n"
+        f"Karta: <code>{CARD_NUMBER}</code>\n"
+        f"Summa: {amount}💎\n\n"
+        f"<b>Narxlar:</b>\n"
+        f"50 olmos — 5 000 so'm\n"
+        f"100 olmos — 10 000 so'm\n"
+        f"500 olmos — 45 000 so'm\n"
+        f"1000 olmos — 80 000 so'm\n"
+        f"5000 olmos — 350 000 so'm\n"
+        f"10000 olmos — 600 000 so'm\n\n"
+        f"To'lov qilgach, chek rasmini shu yerga yuboring.\n"
+        f"Admin tasdiqlagach +{amount}💎 hisobingizga tushadi."
+    )
+    await message.answer(text, parse_mode="HTML")
+
+
+async def handle_photo(message: Message, bot: Bot):
+    user = message.from_user
+    if message.chat.type != "private":
+        return
+    from ..economy import get_profile
+    profile = get_profile(user.id, user.first_name, user.username or "")
+    caption = message.caption or ""
+    # extract amount from caption or default to 50
+    amount = 50
+    if caption.strip().isdigit():
+        amount = max(10, min(100000, int(caption.strip())))
+    text = (
+        f"📸 Chek rasmi qabul qilindi!\n\n"
+        f"Admin tekshirib, olmoslarni hisobingizga qo'shadi.\n"
+        f"Iltimos kuting..."
+    )
+    await message.answer(text)
+    try:
+        kb = make_inline_keyboard([
+            [InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"confirm_pay:{user.id}:{amount}"),
+             InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_pay:{user.id}:{amount}")]
+        ])
+        await bot.send_photo(
+            ADMIN_ID,
+            photo=message.photo[-1].file_id,
+            caption=f"💳 To'lov cheki\n\nFoydalanuvchi: {user.full_name}\nID: {user.id}\nUsername: @{user.username or 'none'}\nSumma: {amount}💎\n\nIzoh: {caption}",
+            reply_markup=kb
+        )
+    except Exception as e:
+        log.error(f"Failed to forward photo to admin: {e}")
 
 
 async def cmd_shop(message: Message, bot: Bot):

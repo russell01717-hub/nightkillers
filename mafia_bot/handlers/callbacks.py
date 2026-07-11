@@ -43,6 +43,7 @@ def register(dp, bot: Bot):
     dp.callback_query.register(handle_night_transport2, F.data.startswith("nv_transport2:"))
     dp.callback_query.register(handle_night_consigliere, F.data.startswith("nv_consigliere:"))
     dp.callback_query.register(handle_night_izquvar, F.data.startswith("nv_izquvar:"))
+    dp.callback_query.register(handle_night_amnesiac, F.data.startswith("nv_amnesiac:"))
     dp.callback_query.register(handle_night_watch, F.data.startswith("nv_watch:"))
     dp.callback_query.register(handle_night_investigate, F.data.startswith("nv_investigate:"))
     dp.callback_query.register(handle_night_detective, F.data.startswith("nv_detective:"))
@@ -64,6 +65,8 @@ def register(dp, bot: Bot):
     dp.callback_query.register(handle_night_forger, F.data.startswith("nv_forger:"))
     dp.callback_query.register(handle_day_vote, F.data.startswith("d_vote:"))
     dp.callback_query.register(handle_day_skip, F.data.startswith("d_skip:"))
+    dp.callback_query.register(handle_day_advokat, F.data.startswith("d_advokat:"))
+    dp.callback_query.register(handle_day_advokat_pick, F.data.startswith("d_advokat_pick:"))
     dp.callback_query.register(handle_shop_buy, F.data == "shop_buy")
     dp.callback_query.register(handle_confirm_pay, F.data.startswith("confirm_pay:"))
     dp.callback_query.register(handle_reject_pay, F.data.startswith("reject_pay:"))
@@ -353,15 +356,19 @@ async def handle_night_veteran(callback: CallbackQuery, bot: Bot):
     parts = data.split(":")
     if len(parts) < 3:
         return
+    choice = parts[1]
     user_id = callback.from_user.id
-    game = games.get(int(parts[1]))
+    game = games.get(int(parts[2]))
     err = validate_callback(callback, game, [GamePhase.NIGHT], require_alive=True)
     if err:
         await callback.message.answer(err)
         return
-    game.veteran_active = True
+    if choice == "yes":
+        game.veteran_active = True
+        await safe_send_message(bot, user_id, "🎖 Hujum rejimi faollashtirildi! Sizga hujum qilgan o'ladi.")
+    else:
+        await safe_send_message(bot, user_id, "🎖 Hujum rejimisiz.")
     game.action_ready[user_id] = True
-    await safe_send_message(bot, user_id, "🎖 Hujum rejimi faollashtirildi! Sizga hujum qilgan o'ladi.")
 
 
 async def handle_night_protect(callback: CallbackQuery, bot: Bot):
@@ -598,14 +605,95 @@ async def _night_target_handler(
 
 
 async def handle_night_watch(callback, bot): await _night_target_handler(callback, bot, Role.KUZATUVCHI, "kuzatuvchi_target")
+async def handle_night_amnesiac(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 3:
+        return
+    chat_id = int(parts[1])
+    target_id = int(parts[2])
+    user_id = callback.from_user.id
+    game = games.get(chat_id)
+    err = validate_callback(callback, game, [GamePhase.NIGHT], require_alive=True)
+    if err:
+        await callback.message.answer(err)
+        return
+    player = game.get_player(user_id)
+    if player.role != Role.AMNESIAC:
+        await callback.message.answer("❌ Siz Amnesiac emassiz!")
+        return
+    target = game.get_player(target_id)
+    if not target or not target.role:
+        await callback.message.answer("❌ Bu o'yinchining roli yo'q.")
+        game.action_ready[user_id] = True
+        return
+    adopted_role = target.role.value
+    player.amnesiac_adopted_role = adopted_role
+    player.role = target.role
+    player.team = target.team
+    game.action_ready[user_id] = True
+    await safe_send_message(bot, user_id, f"❓ Siz {target.role_display} rolini esladingiz! Endi siz {target.team} tomonidasiz!")
+
 async def handle_night_investigate(callback, bot): await _night_target_handler(callback, bot, Role.TERGOVCHI, "tergovchi_target")
 async def handle_night_detective(callback, bot): await _night_target_handler(callback, bot, Role.DETEKTIV, "detective_target")
 async def handle_night_psychologist(callback, bot): await _night_target_handler(callback, bot, Role.PSIXOLOG, "psychologist_target")
 async def handle_night_engineer(callback, bot): await _night_target_handler(callback, bot, Role.MUHANDIS, "engineer_target")
 async def handle_night_oracle(callback, bot): await _night_target_handler(callback, bot, Role.ORACLE, "oracle_target")
 async def handle_night_priest(callback, bot): await _night_target_handler(callback, bot, Role.PRIEST, "priest_target")
-async def handle_night_arsonist(callback, bot): await _night_target_handler(callback, bot, Role.ARSONIST, "arsonist_targets")
-async def handle_night_witch(callback, bot): await _night_target_handler(callback, bot, Role.WITCH, "witch_control")
+async def handle_night_arsonist(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 3:
+        return
+    sub = parts[1]
+    chat_id = int(parts[2])
+    user_id = callback.from_user.id
+    game = games.get(chat_id)
+    err = validate_callback(callback, game, [GamePhase.NIGHT], require_alive=True)
+    if err:
+        await callback.message.answer(err)
+        return
+    player = game.get_player(user_id)
+    if player.role != Role.ARSONIST:
+        await callback.message.answer("❌ Siz Arsonist emassiz!")
+        return
+    if sub == "ignite":
+        game.arsonist_ignite = True
+        game.action_ready[user_id] = True
+        await safe_send_message(bot, user_id, "🔥 Barcha doused o'yinchilar yoqib yuborildi!")
+        return
+    target_id = int(sub)
+    if target_id not in game.arsonist_targets:
+        game.arsonist_targets.append(target_id)
+    game.action_ready[user_id] = True
+    target = game.get_player(target_id)
+    target.doused = True
+    await safe_send_message(bot, user_id, f"⛽ {target.display} benzin bilan sepildi!")
+
+async def handle_night_witch(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 3:
+        return
+    chat_id = int(parts[1])
+    target_id = int(parts[2])
+    user_id = callback.from_user.id
+    game = games.get(chat_id)
+    err = validate_callback(callback, game, [GamePhase.NIGHT], require_alive=True)
+    if err:
+        await callback.message.answer(err)
+        return
+    player = game.get_player(user_id)
+    if player.role != Role.WITCH:
+        await callback.message.answer("❌ Siz Witch emassiz!")
+        return
+    game.witch_control[user_id] = target_id
+    game.action_ready[user_id] = True
+    target = game.get_player(target_id)
+    await safe_send_message(bot, user_id, f"🧙 {target.display} boshqaruvga olindi!")
 async def handle_night_assassin(callback, bot): await _night_target_handler(callback, bot, Role.ASSASSIN, "assassin_target")
 async def handle_night_bomber(callback, bot): await _night_target_handler(callback, bot, Role.BOMBER, "bomber_target")
 async def handle_night_poisoner(callback, bot): await _night_target_handler(callback, bot, Role.POISONER, "poisoner_target")
@@ -665,6 +753,60 @@ async def handle_day_skip(callback: CallbackQuery, bot: Bot):
     await safe_send_message(bot, user_id, f"⏭ Ovoz berishni o'tkazib yubordingiz.")
 
 
+async def handle_day_advokat(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 2:
+        return
+    chat_id = int(parts[1])
+    user_id = callback.from_user.id
+
+    game = games.get(chat_id)
+    err = validate_callback(callback, game, [GamePhase.VOTING], require_alive=True)
+    if err:
+        return
+
+    player = game.get_player(user_id)
+    if player.role != Role.ADVOKAT:
+        await callback.message.answer("❌ Siz Advokat emassiz!")
+        return
+
+    # Show player list to choose who to protect
+    kb = make_players_keyboard(game.alive_players, "d_advokat_pick", chat_id=chat_id, columns=2)
+    await callback.message.edit_text(
+        f"⚖️ Kimni himoya qilamiz?\nOvoz berish natijasida u himoya qilinadi.",
+        reply_markup=kb
+    )
+
+
+async def handle_day_advokat_pick(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 3:
+        return
+    chat_id = int(parts[1])
+    target_id = int(parts[2])
+    user_id = callback.from_user.id
+
+    game = games.get(chat_id)
+    err = validate_callback(callback, game, [GamePhase.VOTING], require_alive=True)
+    if err:
+        return
+
+    player = game.get_player(user_id)
+    if player.role != Role.ADVOKAT:
+        await callback.message.answer("❌ Siz Advokat emassiz!")
+        return
+
+    game.advokat_protect = target_id
+    target = game.get_player(target_id)
+    await safe_send_message(bot, user_id, f"⚖️ {target.display} himoya qilinadi!")
+    # Restore original voting UI
+    await callback.message.edit_text(f"⚖️ Nimoyadagi: {target.display} ({game.day}-kun ovozida himoyalanadi)")
+
+
 # ── Shop ──
 
 async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
@@ -689,22 +831,26 @@ async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
 
 async def handle_confirm_pay(callback: CallbackQuery, bot: Bot):
     await callback.answer()
-    user_id = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    amount = int(parts[2]) if len(parts) > 2 else 50
     from ..economy import add_olmos
-    add_olmos(user_id, 50)
+    add_olmos(user_id, amount)
     await callback.message.edit_text(
-        f"{callback.message.html_text}\n\n✅ To'lov tasdiqlandi! +50💎"
+        f"{callback.message.html_text}\n\n✅ To'lov tasdiqlandi! +{amount}💎"
     )
-    await bot.send_message(user_id, "✅ To'lovingiz tasdiqlandi! +50💎 hisobingizga tushdi.")
+    await bot.send_message(user_id, f"✅ To'lovingiz tasdiqlandi! +{amount}💎 hisobingizga tushdi.")
 
 
 async def handle_reject_pay(callback: CallbackQuery, bot: Bot):
     await callback.answer()
-    user_id = int(callback.data.split(":")[1])
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    amount = int(parts[2]) if len(parts) > 2 else 50
     await callback.message.edit_text(
         f"{callback.message.html_text}\n\n❌ To'lov rad etildi."
     )
-    await bot.send_message(user_id, "❌ To'lovingiz rad etildi. Admin bilan bog'lanib ko'ring.")
+    await bot.send_message(user_id, f"❌ {amount}💎 to'lovingiz rad etildi. Admin bilan bog'lanib ko'ring.")
 
 
 # ── Start menu callbacks ──

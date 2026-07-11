@@ -153,6 +153,13 @@ def check_winner(game: MafiaGame) -> Optional[str]:
     mafia_alive = len([p for p in alive if p.team == "mafia"])
     town_alive = len([p for p in alive if p.team == "town"])
     neutral_alive = len([p for p in alive if p.team == "neutral"])
+
+    # Executioner win: their target was eliminated by vote
+    if game.executioner_target and not game.get_player(game.executioner_target):
+        for p in game.players.values():
+            if p.role == Role.EXECUTIONER and p.alive:
+                return "neutral"
+
     if neutral_alive >= 1 and mafia_alive + town_alive == 0:
         return "neutral"
     if mafia_alive == 0:
@@ -363,8 +370,10 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
             )
             game.action_ready[player.user_id] = True
         elif role == Role.VETERAN:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_veteran", chat_id=cid)
+            kb = make_inline_keyboard([
+                [InlineKeyboardButton(text="✅ Ha", callback_data=f"nv_veteran:yes:{cid}"),
+                 InlineKeyboardButton(text="❌ Yo'q", callback_data=f"nv_veteran:no:{cid}")]
+            ])
             await safe_send_message(
                 bot, player.user_id,
                 f"🎖 <b>{game.day}-tun</b>\n\nHujum rejimiga o'tasizmi?",
@@ -413,11 +422,23 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
-        elif role in (Role.ARSONIST, Role.WITCH, Role.ASSASSIN, Role.BOMBER,
+        elif role == Role.ARSONIST:
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            kb = make_players_keyboard(targets, "nv_arsonist", chat_id=cid)
+            kb.inline_keyboard.append([
+                InlineKeyboardButton(text="🔥 Yoqish", callback_data=f"nv_arsonist:ignite:{cid}")
+            ])
+            await safe_send_message(
+                bot, player.user_id,
+                f"🔥 <b>{game.day}-tun</b>\n\nKimni benzin bilan sepamiz?",
+                reply_markup=kb
+            )
+            game.action_ready[player.user_id] = False
+        elif role in (Role.WITCH, Role.ASSASSIN, Role.BOMBER,
                       Role.POISONER, Role.PROFESSIONAL, Role.ROLEBLOCKER,
                       Role.SILENCER, Role.BLACKMAILER, Role.FRAMER):
             prefix_map2 = {
-                Role.ARSONIST: "nv_arsonist", Role.WITCH: "nv_witch",
+                Role.WITCH: "nv_witch",
                 Role.ASSASSIN: "nv_assassin", Role.BOMBER: "nv_bomber",
                 Role.POISONER: "nv_poisoner", Role.PROFESSIONAL: "nv_professional",
                 Role.ROLEBLOCKER: "nv_roleblock", Role.SILENCER: "nv_silence",
@@ -469,7 +490,23 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
             }[role]
             await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\n{msg}")
             game.action_ready[player.user_id] = True
-        elif role in (Role.TINCH, Role.MER, Role.AMNESIAC):
+        elif role == Role.AMNESIAC:
+            dead_with_roles = [p for p in game.dead_players if p.role and p.role != Role.TINCH]
+            if dead_with_roles and not player.amnesiac_adopted_role:
+                kb = make_players_keyboard(dead_with_roles, "nv_amnesiac", chat_id=cid)
+                await safe_send_message(
+                    bot, player.user_id,
+                    f"❓ <b>{game.day}-tun</b>\n\nKimning rolini eslaysiz?",
+                    reply_markup=kb
+                )
+                game.action_ready[player.user_id] = False
+            elif player.amnesiac_adopted_role:
+                await safe_send_message(bot, player.user_id, f"❓ Siz {player.amnesiac_adopted_role} rolidasiz!")
+                game.action_ready[player.user_id] = True
+            else:
+                await safe_send_message(bot, player.user_id, f"❓ O'liklar orasida maxsus rol yo'q.")
+                game.action_ready[player.user_id] = True
+        elif role in (Role.TINCH, Role.MER):
             await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nSiz uxlayapsiz...")
             game.action_ready[player.user_id] = True
         else:
@@ -687,21 +724,27 @@ async def end_night_phase(game: MafiaGame, bot: Bot):
             target.alive = False
             results["killed"].add(at)
 
-    # Bomber detonation
+    # Bomber detonation (plant one night, detonate next)
+    if game.bomber_planted_target is not None:
+        bpt = resolve_target(game.bomber_planted_target)
+        target = game.get_player(bpt)
+        if target and target.alive and bpt not in results["protected"]:
+            target.alive = False
+            results["killed"].add(bpt)
+        game.bomber_planted_target = None
     if game.bomber_target is not None and game.bomber_target not in roleblocked:
-        bt = resolve_target(game.bomber_target)
-        target = game.get_player(bt)
-        if target and target.alive and bt not in results["protected"]:
-            target.alive = False
-            results["killed"].add(bt)
+        game.bomber_planted_target = game.bomber_target
 
-    # Poisoner kill
-    if game.poisoner_target is not None and game.poisoner_target not in roleblocked:
-        pot = resolve_target(game.poisoner_target)
-        target = game.get_player(pot)
-        if target and target.alive and pot not in results["protected"]:
+    # Poisoner — mark as poisoned, kills next morning
+    if game.poisoned_player is not None:
+        ppt = resolve_target(game.poisoned_player)
+        target = game.get_player(ppt)
+        if target and target.alive and ppt not in results["protected"]:
             target.alive = False
-            results["killed"].add(pot)
+            results["killed"].add(ppt)
+        game.poisoned_player = None
+    if game.poisoner_target is not None and game.poisoner_target not in roleblocked:
+        game.poisoned_player = game.poisoner_target
 
     # Arsonist ignite
     if game.arsonist_ignite:
@@ -835,6 +878,12 @@ async def start_day_phase(game: MafiaGame, bot: Bot):
     if game.vote_round > 1:
         kb.inline_keyboard.append([
             InlineKeyboardButton(text=f"🔄 Qayta ovoz ({game.vote_round}-tur)", callback_data=f"d_skip:{game.chat_id}")
+        ])
+    # Advokat protection button
+    advokat = next((p for p in game.alive_players if p.role == Role.ADVOKAT), None)
+    if advokat and not game.advokat_protect:
+        kb.inline_keyboard.append([
+            InlineKeyboardButton(text="⚖️ Himoya qilish", callback_data=f"d_advokat:{game.chat_id}")
         ])
 
     if game.game_msg_id:

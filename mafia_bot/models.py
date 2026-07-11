@@ -39,6 +39,7 @@ class Player:
     last_words: Optional[str] = None
     afk_rounds: int = 0
     last_action_round: int = 0
+    amnesiac_adopted_role: Optional[str] = None
 
     @property
     def display(self) -> str:
@@ -67,6 +68,7 @@ class Player:
             "night_target": self.night_target, "has_acted": self.has_acted,
             "last_words": self.last_words, "afk_rounds": self.afk_rounds,
             "last_action_round": self.last_action_round,
+            "amnesiac_adopted_role": self.amnesiac_adopted_role,
         }
 
     @staticmethod
@@ -88,6 +90,7 @@ class Player:
             last_words=data.get("last_words"),
             afk_rounds=data.get("afk_rounds", 0),
             last_action_round=data.get("last_action_round", 0),
+            amnesiac_adopted_role=data.get("amnesiac_adopted_role"),
         )
 
 
@@ -152,6 +155,9 @@ class MafiaGame:
     advokat_protect: Optional[int] = None
     elo_k: int = 32
     vote_round: int = 1
+    executioner_target: Optional[int] = None
+    bomber_planted_target: Optional[int] = None
+    poisoned_player: Optional[int] = None
 
     def __post_init__(self):
         self.game_id = f"G{self.chat_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -245,6 +251,8 @@ class MafiaGame:
         self.healed_player = None
         self.revived_player = None
         self.advokat_protect = None
+        self.executioner_target = None
+        # bomber_planted_target and poisoned_player persist across nights
 
     def reset_day(self):
         for p in self.players.values():
@@ -307,6 +315,9 @@ class MafiaGame:
             "kill_targets": self.kill_targets, "healed_player": self.healed_player,
             "revived_player": self.revived_player, "advokat_protect": self.advokat_protect,
             "elo_k": self.elo_k, "vote_round": self.vote_round,
+            "executioner_target": self.executioner_target,
+            "bomber_planted_target": self.bomber_planted_target,
+            "poisoned_player": self.poisoned_player,
         }
 
     @classmethod
@@ -365,6 +376,9 @@ class MafiaGame:
         game.advokat_protect = data.get("advokat_protect")
         game.elo_k = data.get("elo_k", 32)
         game.vote_round = data.get("vote_round", 1)
+        game.executioner_target = data.get("executioner_target")
+        game.bomber_planted_target = data.get("bomber_planted_target")
+        game.poisoned_player = data.get("poisoned_player")
         return game
 
 
