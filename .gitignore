@@ -1,0 +1,42 @@
+﻿# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Database
+*.db
+*.db-shm
+*.db-wal
+*.sqlite3
+
+# Backup files
+*.bak
+*.backup
+
+# Sensitive config files
+config.json
+config.json.bak
+.env
+*.env
+
+# Batch files with secrets
+start_aiogram.bat
+start_bot.bat
+
+# Game state JSON
+games.json
+games.json.bak
+profiles.json
+profiles.json.bak
+confirmed_pay.json
+confirmed_pay.json.bak
+weekly.json
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+.DS_Store
