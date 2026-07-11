@@ -36,6 +36,9 @@ class Player:
     joined_at: float = field(default_factory=lambda: datetime.now().timestamp())
     night_target: Optional[int] = None
     has_acted: bool = False
+    last_words: Optional[str] = None
+    afk_rounds: int = 0
+    last_action_round: int = 0
 
     @property
     def display(self) -> str:
@@ -62,6 +65,8 @@ class Player:
             "roleblocked": self.roleblocked, "framed": self.framed,
             "forger_role": self.forger_role, "transported_with": self.transported_with,
             "night_target": self.night_target, "has_acted": self.has_acted,
+            "last_words": self.last_words, "afk_rounds": self.afk_rounds,
+            "last_action_round": self.last_action_round,
         }
 
     @staticmethod
@@ -80,6 +85,9 @@ class Player:
             roleblocked=data.get("roleblocked", False), framed=data.get("framed", False),
             forger_role=data.get("forger_role"), transported_with=data.get("transported_with"),
             night_target=data.get("night_target"), has_acted=data.get("has_acted", False),
+            last_words=data.get("last_words"),
+            afk_rounds=data.get("afk_rounds", 0),
+            last_action_round=data.get("last_action_round", 0),
         )
 
 
@@ -142,6 +150,8 @@ class MafiaGame:
     healed_player: Optional[int] = None
     revived_player: Optional[int] = None
     advokat_protect: Optional[int] = None
+    elo_k: int = 32
+    vote_round: int = 1
 
     def __post_init__(self):
         self.game_id = f"G{self.chat_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
@@ -239,7 +249,9 @@ class MafiaGame:
     def reset_day(self):
         for p in self.players.values():
             p.vote = None
+            p.last_words = None
         self.action_ready = {}
+        self.vote_round = 1
 
     def get_roles_text(self) -> str:
         lines = []
@@ -294,6 +306,7 @@ class MafiaGame:
             "janitor_target": self.janitor_target, "forger_target": self.forger_target,
             "kill_targets": self.kill_targets, "healed_player": self.healed_player,
             "revived_player": self.revived_player, "advokat_protect": self.advokat_protect,
+            "elo_k": self.elo_k, "vote_round": self.vote_round,
         }
 
     @classmethod
@@ -350,6 +363,8 @@ class MafiaGame:
         game.healed_player = data.get("healed_player")
         game.revived_player = data.get("revived_player")
         game.advokat_protect = data.get("advokat_protect")
+        game.elo_k = data.get("elo_k", 32)
+        game.vote_round = data.get("vote_round", 1)
         return game
 
 

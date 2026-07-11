@@ -73,6 +73,28 @@ def init_db():
             mode TEXT DEFAULT 'classic'
         )
     """)
+    for col in ["elo", "achievements"]:
+        try:
+            conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} DEFAULT 0")
+        except Exception:
+            pass
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS achievements (
+            user_id INTEGER,
+            ach_key TEXT,
+            earned_at TEXT,
+            PRIMARY KEY (user_id, ach_key)
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS anticheat_log (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chat_id INTEGER,
+            user_id INTEGER,
+            reason TEXT,
+            timestamp TEXT
+        )
+    """)
     conn.execute("""
         CREATE TABLE IF NOT EXISTS game_logs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -255,3 +277,91 @@ def delete_active_game(chat_id: int):
         conn.commit()
     except Exception as e:
         log.error(f"Failed to delete active game {chat_id}: {e}")
+
+
+# ── ELO Rating ──
+
+def get_elo(user_id: int, default: int = 1000) -> int:
+    profile = get_profile(user_id)
+    return profile.get("elo", default)
+
+
+def update_elo(user_id: int, delta: int):
+    profile = get_profile(user_id)
+    profile["elo"] = max(0, profile.get("elo", 1000) + delta)
+    save_profile(user_id, profile)
+
+
+def expected_score(rating_a: int, rating_b: int) -> float:
+    return 1.0 / (1.0 + 10 ** ((rating_b - rating_a) / 400.0))
+
+
+# ── Achievements ──
+
+ACHIEVEMENTS = {
+    "first_win": "🏆 Birinchi g'alaba",
+    "mafia_win": "🔪 Mafia g'alabasi",
+    "town_win": "👤 Shahar g'alabasi",
+    "komissar_check": "🔍 Komissar tekshiruvi",
+    "vigilante_kill": "🔫 Vigilante otishi",
+    "joker_win": "🃏 Joker g'alabasi",
+    "sherif_revenge": "⭐ Sherif qasosi",
+    "maniyak_win": "🪓 Maniyak g'alabasi",
+    "survivor_win": "⛺ Survivor g'alabasi",
+    "arifmetist": "📊 10 ta o'yin",
+    "veteran": "🎖 50 ta o'yin",
+    "legend": "💎 100 ta o'yin",
+}
+
+
+def unlock_achievement(user_id: int, ach_key: str):
+    if ach_key not in ACHIEVEMENTS:
+        return
+    conn = get_db()
+    try:
+        conn.execute(
+            "INSERT OR IGNORE INTO achievements (user_id, ach_key, earned_at) VALUES (?, ?, ?)",
+            (user_id, ach_key, datetime.now().isoformat())
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def get_achievements(user_id: int) -> list:
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT ach_key, earned_at FROM achievements WHERE user_id = ? ORDER BY earned_at",
+        (user_id,)
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_all_achievements(user_id: int) -> dict:
+    earned = {r["ach_key"] for r in get_achievements(user_id)}
+    return {k: {"name": v, "earned": k in earned} for k, v in ACHIEVEMENTS.items()}
+
+
+# ── Anticheat ──
+
+def log_anticheat(chat_id: int, user_id: int, reason: str):
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO anticheat_log (chat_id, user_id, reason, timestamp) VALUES (?, ?, ?, ?)",
+        (chat_id, user_id, reason, datetime.now().isoformat())
+    )
+    conn.commit()
+
+
+def get_anticheat_logs(chat_id: Optional[int] = None, limit: int = 50) -> list:
+    conn = get_db()
+    if chat_id:
+        rows = conn.execute(
+            "SELECT * FROM anticheat_log WHERE chat_id = ? ORDER BY id DESC LIMIT ?",
+            (chat_id, limit)
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT * FROM anticheat_log ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [dict(r) for r in rows]

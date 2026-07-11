@@ -1,0 +1,70 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  name      String
+  login     String   @unique
+  password  String
+  role      String   @default("admin")
+  createdAt DateTime @default(now())
+}
+
+model Group {
+  id             Int       @id @default(autoincrement())
+  name           String
+  description    String    @default("")
+  pricePerLesson Int       @default(0)
+  createdAt      DateTime  @default(now())
+  students       Student[]
+  lessons        Lesson[]
+}
+
+model Student {
+  id        Int        @id @default(autoincrement())
+  name      String
+  phone     String     @default("")
+  groupId   Int
+  balance   Int        @default(0)
+  createdAt DateTime   @default(now())
+  group     Group      @relation(fields: [groupId], references: [id])
+  attendances Attendance[]
+  payments   Payment[]
+}
+
+model Lesson {
+  id        Int          @id @default(autoincrement())
+  groupId   Int
+  date      String
+  topic     String       @default("")
+  createdAt DateTime     @default(now())
+  group     Group        @relation(fields: [groupId], references: [id])
+  attendances Attendance[]
+}
+
+model Attendance {
+  id        Int      @id @default(autoincrement())
+  studentId Int
+  lessonId  Int
+  status    String
+  createdAt DateTime @default(now())
+  student   Student  @relation(fields: [studentId], references: [id])
+  lesson    Lesson   @relation(fields: [lessonId], references: [id])
+}
+
+model Payment {
+  id        Int      @id @default(autoincrement())
+  studentId Int
+  amount    Int
+  type      String
+  note      String   @default("")
+  date      String
+  createdAt DateTime @default(now())
+  student   Student  @relation(fields: [studentId], references: [id])
+}

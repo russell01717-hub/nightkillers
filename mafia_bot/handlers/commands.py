@@ -65,6 +65,10 @@ def register(dp, bot: Bot):
     dp.message.register(cmd_help, Command("help"))
     dp.message.register(cmd_rating, Command("rating"))
     dp.message.register(cmd_mystats, Command("stats"))
+    dp.message.register(cmd_lastwords, Command("lastwords"))
+    dp.message.register(cmd_admin, Command("admin"))
+    dp.message.register(cmd_achievements, Command("achievements"))
+    dp.message.register(cmd_elo, Command("elo"))
 
 
 async def is_group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -832,7 +836,12 @@ async def cmd_help(message: Message, bot: Bot):
         "<b>Ma'lumot:</b>\n"
         "/geroyinfo — Hero tizimi\n"
         "/about — Bot haqida\n"
-        "/help — Yordam"
+        "/help — Yordam\n\n"
+        "<b>Yangi:</b>\n"
+        "/achievements — Yutuqlar\n"
+        "/elo — Reyting ball\n"
+        "/lastwords — So'nggi so'z\n"
+        "/admin — Admin panel (admin)"
     )
     await message.answer(text, parse_mode="HTML")
 
@@ -870,3 +879,104 @@ async def cmd_mystats(message: Message, bot: Bot):
         f"└ 💰 {profile.get('olmos', 0)}💎 | {profile.get('evro', 0)}💶",
         parse_mode="HTML"
     )
+
+
+async def cmd_lastwords(message: Message, bot: Bot):
+    user_id = message.from_user.id
+    for game in games.values():
+        if game.phase == GamePhase.EXECUTION:
+            player = game.get_player(user_id)
+            if player and not player.alive:
+                args = message.text.split(maxsplit=1)
+                if len(args) < 2:
+                    await message.answer("💡 /lastwords <matn>")
+                    return
+                player.last_words = args[1][:200]
+                await message.answer("✅ So'nggi so'z saqlandi!")
+                return
+    await message.answer("❌ Hozir so'nggi so'z yozish mumkin emas.")
+
+
+@admin_only
+async def cmd_admin(message: Message, bot: Bot):
+    from ..db import get_anticheat_logs, save_profile
+    chat_id = message.chat.id
+    args = message.text.split()
+    if len(args) < 2:
+        text = (
+            "🛠 <b>Admin panel</b>\n\n"
+            "/admin anticheat — Anticheat loglari\n"
+            "/admin games — Faol o'yinlar\n"
+            "/admin reset <user_id> — Profilni tozalash\n"
+            "/admin force_end — O'yinni tugatish\n"
+        )
+        await message.answer(text, parse_mode="HTML")
+        return
+
+    sub = args[1].lower()
+    if sub == "anticheat":
+        logs = get_anticheat_logs(chat_id, 20)
+        if not logs:
+            await message.answer("✅ Anticheat logi yo'q.")
+            return
+        lines = ["🚨 <b>Anticheat:</b>\n"]
+        for l in logs[:20]:
+            lines.append(f"#{l['id']} U:{l['user_id']} — {l['reason']}")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+    elif sub == "games":
+        active = [(cid, g.phase.value, len(g.alive_players)) for cid, g in games.items()]
+        if not active:
+            await message.answer("✅ Faol o'yin yo'q.")
+            return
+        lines = ["🎮 <b>Faol o'yinlar:</b>\n"]
+        for cid, phase, alive in active:
+            lines.append(f"• Chat {cid}: {phase}, {alive} tirik")
+        await message.answer("\n".join(lines), parse_mode="HTML")
+    elif sub == "reset" and len(args) > 2:
+        target_id = int(args[2])
+        profile = get_profile(target_id)
+        profile["games"] = 0
+        profile["wins"] = 0
+        profile["losses"] = 0
+        profile["olmos"] = 0
+        profile["evro"] = 0
+        profile["elo"] = 1000
+        save_profile(target_id, profile)
+        await message.answer(f"✅ {target_id} profili tozalandi.")
+    elif sub == "force_end":
+        if chat_id in games:
+            from ..game_engine import end_game
+            game = games[chat_id]
+            game.cancel_timers()
+            await end_game(game, bot, "town")
+            await message.answer("✅ O'yin tugatildi.")
+
+
+async def cmd_achievements(message: Message, bot: Bot):
+    from ..db import get_all_achievements
+    all_ach = get_all_achievements(message.from_user.id)
+    lines = ["🏅 <b>Yutuqlar</b>\n"]
+    for key, info in all_ach.items():
+        status = "✅" if info["earned"] else "⬜"
+        lines.append(f"{status} {info['name']}")
+    await message.answer("\n".join(lines), parse_mode="HTML")
+
+
+async def cmd_elo(message: Message, bot: Bot):
+    from ..db import get_elo
+    user = message.from_user
+    args = message.text.split()
+    target_id = user.id
+    if len(args) > 1:
+        identifier = args[1].lstrip("@")
+        if identifier.isdigit():
+            target_id = int(identifier)
+        else:
+            for uid, p in get_all_profiles().items():
+                if p.get("username", "").lower() == identifier.lower():
+                    target_id = uid
+                    break
+    elo = get_elo(target_id)
+    profile = get_profile(target_id)
+    name = profile.get("name", "Noma'lum")
+    await message.answer(f"♟ <b>{name}</b> reytingi: <b>{elo}</b>", parse_mode="HTML")

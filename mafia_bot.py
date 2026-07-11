@@ -1,4 +1,8 @@
-import os, sys, random, logging, asyncio, json, time, tempfile, shutil
+import os, sys, random, logging, asyncio, json, time, tempfile, shutil, io, copy, types
+try:
+    from PIL import Image
+except:
+    Image = None
 from typing import Dict, Optional
 try:
     sys.path.insert(0, r"D:\pylibs")
@@ -7,8 +11,8 @@ except:
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
-TOKEN = os.getenv("BOT_TOKEN", "8388604050:AAFLH3sa6kIbg3YuuiLGMp1VBJT0JT2X9vg")
-MAX_PLAYERS = 40
+TOKEN = os.environ["BOT_TOKEN"]
+MAX_PLAYERS = 100
 DEFAULT_NIGHT = 45
 DEFAULT_VOTE = 45
 NIGHT_GIF = "BQACAgIAAxkBAAOoag8GAhuRN1n13dquB5-1trg6dVYAApOiAAKZ6IFIO8rY5Yz9VEU7BA"
@@ -17,8 +21,10 @@ STATS_FILE = os.path.join(os.path.dirname(__file__), "stats.json")
 PROFILES_FILE = os.path.join(os.path.dirname(__file__), "profiles.json")
 WEEKLY_FILE = os.path.join(os.path.dirname(__file__), "weekly.json")
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
+GAMES_FILE = os.path.join(os.path.dirname(__file__), "games.json")
+CONFIRMED_PAY_FILE = os.path.join(os.path.dirname(__file__), "confirmed_pay.json")
 GAME_IMAGE = None
-CARD_NUMBER = "4073-4200-7154-7032"
+CARD_NUMBER = os.getenv("CARD_NUMBER", "4073-4200-7154-7032")
 ADMIN_ID = 7820231987
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -28,37 +34,63 @@ settings_chats: Dict[int, dict] = {}
 pending_checks: Dict[int, dict] = {}
 night_step: Dict[int, dict] = {}
 cooldown: Dict[int, float] = {}
+chat_cooldown: Dict[int, float] = {}
 profile_cache: dict = None
 profile_cache_dirty = False
 GAME_MODES = {"classic": "Classic", "full": "Full"}
-awaiting_image: set = set()
+
 
 
 def atomic_write(filepath, data):
     tmp = filepath + ".tmp"
+    backup = filepath + ".bak"
     try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(filepath):
+            try:
+                shutil.copy2(filepath, backup)
+            except:
+                pass
+        if os.path.exists(filepath):
+            os.replace(tmp, filepath)
+        else:
+            shutil.move(tmp, filepath)
+    except Exception as e:
+        logging.error(f"atomic_write failed for {filepath}: {e}")
         try:
-            if os.path.exists(filepath):
-                os.replace(tmp, filepath)
-            else:
-                shutil.move(tmp, filepath)
+            if os.path.exists(tmp):
+                os.remove(tmp)
         except:
             pass
-    except:
+
+
+def safe_json_load(filepath, default=None):
+    try:
+        with open(filepath, encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, FileNotFoundError):
+        backup = filepath + ".bak"
+        try:
+            with open(backup, encoding="utf-8") as f:
+                data = json.load(f)
+            logging.warning(f"Recovered {filepath} from backup")
+            atomic_write(filepath, data)
+            return data
+        except:
+            pass
+    except Exception:
         pass
+    return default if default is not None else {}
 
 
 def load_profiles():
     global profile_cache
     if profile_cache is not None:
         return profile_cache
-    try:
-        with open(PROFILES_FILE, encoding="utf-8") as f:
-            profile_cache = json.load(f)
-    except:
-        profile_cache = {}
+    profile_cache = safe_json_load(PROFILES_FILE, {})
     changed = False
     for k, v in profile_cache.items():
         if "items" not in v:
@@ -101,6 +133,9 @@ def flush_profiles():
     if profile_cache_dirty and profile_cache is not None:
         atomic_write(PROFILES_FILE, profile_cache)
         profile_cache_dirty = False
+
+
+
 
 
 def get_profile(uid, name=None, username=None):
@@ -199,19 +234,23 @@ def get_set(chat_id):
 def find_game(uid, chat_id=None):
     if chat_id and chat_id in games:
         g = games[chat_id]
-        if uid in g.players and g.players[uid].alive:
+        if uid in g.players:
             return g
     for g in games.values():
-        if uid in g.players and g.players[uid].alive:
+        if uid in g.players:
             return g
     return None
 
 
-def check_flood(uid):
+def check_flood(uid, chat_id=None):
     now = time.time()
     if uid in cooldown and now - cooldown[uid] < 0.8:
         return True
     cooldown[uid] = now
+    if chat_id and chat_id in chat_cooldown and now - chat_cooldown[chat_id] < 0.3:
+        return True
+    if chat_id:
+        chat_cooldown[chat_id] = now
     return False
 
 
@@ -295,6 +334,7 @@ class MafiaGame:
         self.msg_id = None
         self.game_msg_id = None
         self.start_time = None
+        self.game_task = None
 
     @property
     def alive_players(self):
@@ -392,7 +432,7 @@ async def send_safe(context, chat_id, text=None, photo=None, animation=None, cap
         if animation:
             return await context.bot.send_animation(chat_id, animation, caption=caption, parse_mode=parse_mode, reply_markup=reply_markup)
         if photo:
-            return await context.bot.send_photo(chat_id, photo, caption=caption, reply_markup=reply_markup)
+            return await context.bot.send_photo(chat_id, photo, caption=caption, parse_mode=parse_mode, reply_markup=reply_markup)
         if text:
             return await context.bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
     except Exception as e:
@@ -447,11 +487,7 @@ def make_single_kb(buttons):
 
 
 def load_stats():
-    try:
-        with open(STATS_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {}
+    return safe_json_load(STATS_FILE, {})
 
 
 def save_stats(data):
@@ -501,25 +537,187 @@ def dist_weekly_prizes(w):
             save_profile(uid, prof)
 
 
+# ────────── GAME PERSISTENCE ──────────
+
+def game_to_dict(game):
+    players = {}
+    for uid, p in game.players.items():
+        players[str(uid)] = {
+            "user_id": p.user_id, "first_name": p.first_name, "username": p.username,
+            "is_bot": p.is_bot, "role": p.role, "alive": p.alive,
+            "lover": p.lover, "defended": p.defended,
+            "guard_target": p.guard_target, "blocked": p.blocked,
+            "team": p.team, "actions_used": p.actions_used, "hero": p.hero,
+        }
+    votes = {}
+    for k, v in game.votes.items():
+        votes[str(k)] = v
+    mafia_targets = {}
+    for k, v in game.mafia_targets.items():
+        mafia_targets[str(k)] = v
+    blocked = [str(uid) for uid in game.blocked_players]
+    return {
+        "chat_id": game.chat_id, "mode": game.mode,
+        "phase": game.phase, "day": game.day,
+        "players": players,
+        "votes": votes,
+        "actions": {str(k): v for k, v in game.actions.items()},
+        "used_actions": game.used_actions,
+        "action_ready": game.action_ready,
+        "maniac_present": game.maniac_present,
+        "mine_target": game.mine_target, "doc_choice": game.doc_choice,
+        "maniac_target": game.maniac_target, "advokat_target": game.advokat_target,
+        "serjant_choice": game.serjant_choice, "don_target": game.don_target,
+        "mafia_targets": mafia_targets,
+        "muxlis_target": game.muxlis_target, "majnun_target": game.majnun_target,
+        "blocked_players": blocked,
+        "game_msg_id": game.game_msg_id, "start_time": game.start_time,
+    }
+
+def dict_to_game(data):
+    game = MafiaGame(data["chat_id"], data.get("mode", "classic"))
+    game.phase = data.get("phase", "registration")
+    game.day = data.get("day", 0)
+    game.start_time = data.get("start_time")
+    game.game_msg_id = data.get("game_msg_id")
+    game.maniac_present = data.get("maniac_present", False)
+    game.mine_target = data.get("mine_target")
+    game.doc_choice = data.get("doc_choice")
+    game.maniac_target = data.get("maniac_target")
+    game.advokat_target = data.get("advokat_target")
+    game.serjant_choice = data.get("serjant_choice")
+    game.don_target = data.get("don_target")
+    game.muxlis_target = data.get("muxlis_target")
+    game.majnun_target = data.get("majnun_target")
+    game.used_actions = data.get("used_actions", {})
+    game.action_ready = data.get("action_ready", {})
+    for pid, pd in data.get("players", {}).items():
+        p = Player(pd["user_id"], pd["first_name"], pd.get("username"), pd.get("is_bot", False))
+        p.role = pd.get("role")
+        p.alive = pd.get("alive", True)
+        p.lover = pd.get("lover")
+        p.defended = pd.get("defended", False)
+        p.guard_target = pd.get("guard_target")
+        p.blocked = pd.get("blocked", False)
+        p.team = pd.get("team", "village")
+        p.actions_used = pd.get("actions_used", {})
+        p.hero = pd.get("hero", False)
+        game.players[p.user_id] = p
+    for k, v in data.get("votes", {}).items():
+        game.votes[int(k)] = v
+    for k, v in data.get("actions", {}).items():
+        game.actions[int(k)] = v
+    game.mafia_targets = {}
+    for k, v in data.get("mafia_targets", {}).items():
+        game.mafia_targets[int(k)] = v
+    game.blocked_players = {int(uid) for uid in data.get("blocked_players", [])}
+    return game
+
+
+def save_games():
+    d = {}
+    for cid, g in games.items():
+        try:
+            d[str(cid)] = game_to_dict(g)
+        except Exception as e:
+            logging.warning(f"save game {cid} failed: {e}")
+    atomic_write(GAMES_FILE, d)
+
+
+def load_confirmed_payments():
+    try:
+        data = safe_json_load(CONFIRMED_PAY_FILE, [])
+        return set(data) if isinstance(data, list) else set()
+    except:
+        return set()
+
+def save_confirmed_payments():
+    try:
+        atomic_write(CONFIRMED_PAY_FILE, list(confirmed_payments))
+    except:
+        pass
+
+confirmed_payments = load_confirmed_payments()
+
+
+def load_games():
+    data = safe_json_load(GAMES_FILE, {})
+    for cid_str, gd in data.items():
+        try:
+            g = dict_to_game(gd)
+            games[int(cid_str)] = g
+            cid = int(cid_str)
+            if cid not in ghosts:
+                ghosts[cid] = set()
+            for pid in g.players:
+                ghosts[cid].add(pid)
+            # Restart game loop for active games
+            if g.phase in ("night", "day") and g.day > 0:
+                pass  # loop will be started after bot starts
+        except Exception as e:
+            logging.warning(f"load game {cid_str} failed: {e}")
+
+
+def resume_games(app):
+    """Start game loops for all restored active games"""
+    bot = app.bot
+    for cid, g in list(games.items()):
+        if g.phase in ("night", "day") and g.day > 0:
+            ctx = types.SimpleNamespace(bot=bot)
+            g.game_task = asyncio.create_task(game_loop(ctx, g))
+            logging.info(f"Resumed game in chat {cid}, phase={g.phase}, day={g.day}")
+
+
 # ────────── COMMANDS ──────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     u = update.effective_user
-    text = (f"👋 Assalomu alaykum {u.first_name}! Mafia o'yin botiga xush kelibsiz.\n\n"
-            "🌙 Bu yerda siz mafiya a'zosi yoki fuqaro bo'lib o'ynaysiz.\n"
-            "Tun zulmatida mafiya qurbon tanlaydi, kunduzi esa ovoz berib mafiyani topasiz.\n\n"
-            "Buyruqlar:\n"
-            "/mafia - 🎮 O'yin yaratish\n/join - ➕ Qo'shilish\n/leave - ➖ Chiqish\n"
-            "/startgame - 🚀 Boshlash (admin)\n/players - 👥 O'yinchilar\n"
-            "/vote @user - 🗳 Ovoz berish\n/status - 📊 Holat\n"
-            "/money - 💰 Hisob\n/profile - 👤 Profil\n/shop - 🛒 Do'kon\n"
-            "/top - 🏆 Top\n/hafta - 📅 Hafta reytingi\n"
-            "/addbot - 🤖 AI bot qo'shish (admin)\n"
-            "/help - 📖 Yordam")
-    if GAME_IMAGE:
-        await send_safe(context, u.id, photo=GAME_IMAGE, caption=text)
-    else:
-        await update.message.reply_text(text)
+    try:
+        bot_user = await context.bot.get_me()
+        bot_username = bot_user.username
+    except:
+        bot_username = "NightKillersBot"
+    caption = (
+        f"<b>🌙 NIGHT KILLERS</b>\n"
+        f"<i>Zulmatda hech kim begunoh emas...</i>\n\n"
+        f"👤 <b>{u.first_name}</b>, sizni <b>Night Killers</b> olamiga xush kelibsiz!\n"
+        f"Bu yerda sir, qo'rquv va raqobat hukm suradi.\n\n"
+        f"━━━━━━━━━━━━━━━━\n\n"
+        f"🎯 <b>Nega aynan biz?</b>\n\n"
+        f"🌙 <b>27 xil rol</b> bilan murakkab o'yin tizimi\n"
+        f"🤖 <b>Aqlli AI botlar</b> bilan har doim to'liq o'yin\n"
+        f"🏆 <b>Kundalik va haftalik reyting</b>\n"
+        f"💎 <b>Olmos, dollar, evro</b> — to'liq iqtisod tizimi\n"
+        f"🎖 <b>Hero va maxsus itemlar</b> — ustunlik siz tomonda\n"
+        f"🔥 <b>100+ o'yinchi</b> bilan faol hamjamiyat\n\n"
+        f"━━━━━━━━━━━━━━━━\n\n"
+        f"⚡ <b>O'ynash uchun:</b>\n"
+        f"1⃣ Guruhga <b>@NightKillersBot</b> qo'shing\n"
+        f"2⃣ <b>/mafia</b> yozib o'yin yarating\n"
+        f"3⃣ <b>/join</b> yoki tugmani bosing\n"
+        f"4⃣ Admin <b>/startgame</b> bilan o'yinni boshlaydi\n\n"
+        f"<i>🌙 Hech kimga ishonma. Har bir zulmatda yashirin dushman bor...</i>"
+    )
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎮 O'yin yaratish", url=f"https://t.me/{bot_username}?startgroup=new"),
+         InlineKeyboardButton("➕ Qo'shilish", callback_data="start_join")],
+        [InlineKeyboardButton("👤 Profil", callback_data="start_profile"),
+         InlineKeyboardButton("💰 Hisob", callback_data="start_money")],
+        [InlineKeyboardButton("🏆 Reyting", callback_data="start_top"),
+         InlineKeyboardButton("🛒 Do'kon", callback_data="start_shop")],
+        [InlineKeyboardButton("📊 Statistika", callback_data="start_stats"),
+         InlineKeyboardButton("⚙️ Sozlamalar", callback_data="start_settings")],
+        [InlineKeyboardButton("📖 Yordam", callback_data="start_help"),
+         InlineKeyboardButton("ℹ️ Bot haqida", callback_data="start_about")],
+    ])
+    try:
+        if GAME_IMAGE:
+            await context.bot.send_photo(u.id, GAME_IMAGE, caption=caption, parse_mode="HTML", reply_markup=kb)
+        else:
+            await context.bot.send_animation(u.id, NIGHT_GIF, caption=caption, parse_mode="HTML", reply_markup=kb)
+    except Exception as e:
+        logging.warning(f"start media fail for {u.id}: {e}")
+        await update.message.reply_text(caption, parse_mode="HTML", reply_markup=kb, disable_web_page_preview=True)
 
 
 async def mafia(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -545,7 +743,7 @@ async def mafia(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if check_flood(update.effective_user.id):
+    if check_flood(update.effective_user.id, update.effective_chat.id):
         return
     chat_id = update.effective_chat.id
     user = update.effective_user
@@ -564,10 +762,14 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ghosts[chat_id] = set()
     ghosts[chat_id].add(user.id)
     await update_game_msg(context, game)
+    try:
+        await context.bot.send_message(user.id, "✅ O'yinga qo'shildingiz! O'yin boshlanishini kuting. Rolingizni o'yin boshlanganda olasiz.")
+    except:
+        pass
 
 
 async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if check_flood(update.effective_user.id):
+    if check_flood(update.effective_user.id, update.effective_chat.id):
         return
     chat_id = update.effective_chat.id
     user = update.effective_user
@@ -581,14 +783,15 @@ async def leave(update: Update, context: ContextTypes.DEFAULT_TYPE):
     del game.players[user.id]
     if chat_id in ghosts and user.id in ghosts[chat_id]:
         ghosts[chat_id].discard(user.id)
-    text = f"O'yinchilar ({len(game.players)}/{MAX_PLAYERS}):\n"
-    for i, p in enumerate(game.players.values(), 1):
-        text += f"{i}. {p.display}\n"
-    await update.message.reply_text(text)
     if not game.players:
         del games[chat_id]
         ghosts.pop(chat_id, None)
         await update.message.reply_text("Hech kim qolmadi, o'yin bekor qilindi.")
+        return
+    text = f"O'yinchilar ({len(game.players)}/{MAX_PLAYERS}):\n"
+    for i, p in enumerate(game.players.values(), 1):
+        text += f"{i}. {p.display}\n"
+    await update.message.reply_text(text)
 
 
 async def players(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -626,8 +829,8 @@ async def send(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Noto'g'ri summa!")
         return
-    if amount <= 0:
-        await update.message.reply_text("Summa musbat!")
+    if amount <= 0 or amount > 1_000_000_000:
+        await update.message.reply_text("Summa noto'g'ri!")
         return
     prof = get_profile(user.id, user.first_name, user.username)
     if prof["dollars"] < amount:
@@ -677,7 +880,7 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except:
             await update.message.reply_text("Noto'g'ri summa!")
             return
-        if amount <= 0:
+        if amount <= 0 or amount > 1_000_000:
             return
         add_olmos(target_id, amount)
         await update.message.reply_text(f"{amount} olmos berildi!")
@@ -691,7 +894,7 @@ async def give(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Noto'g'ri summa!")
         return
-    if amount <= 0:
+    if amount <= 0 or amount > 1_000_000:
         return
     target_id = None
     for pid_str, pdata in load_profiles().items():
@@ -762,14 +965,17 @@ async def change(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except:
         await update.message.reply_text("Noto'g'ri summa!")
         return
-    if amount <= 0:
-        await update.message.reply_text("Summa musbat!")
+    if amount <= 0 or amount > 1_000_000:
+        await update.message.reply_text("Summa noto'g'ri!")
         return
     prof = get_profile(user.id, user.first_name, user.username)
     if prof["olmos"] < amount:
         await update.message.reply_text("Yetarli olmos yo'q!")
         return
     evro_amt = amount * 1000
+    if evro_amt > 1_000_000_000:
+        await update.message.reply_text("Summa juda katta!")
+        return
     prof["olmos"] -= amount
     prof["evro"] = prof.get("evro", 0) + evro_amt
     save_profile(user.id, prof)
@@ -788,7 +994,7 @@ async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
         amount = int(args[0])
     except:
         return
-    if amount <= 0:
+    if amount <= 0 or amount > 1_000_000:
         return
     plist = [p for g in games.values() for p in g.players.values() if p.alive]
     if not plist:
@@ -832,6 +1038,24 @@ async def geroyinfo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🦸 Qahramon (Hero)\n\nNarxi: 90 olmos\nImkoniyat: Hujum va himoya kuchini oshiradi\nSotib olish uchun /profile -> Hero sotib olish")
 
 
+async def cancel_game(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    if not await is_admin(update.effective_chat, user.id, context):
+        await update.message.reply_text("Faqat admin!")
+        return
+    if chat_id not in games:
+        await update.message.reply_text("O'yin mavjud emas!")
+        return
+    game = games[chat_id]
+    if game.phase == "registration":
+        games.pop(chat_id, None)
+        ghosts.pop(chat_id, None)
+        await update.message.reply_text("❌ O'yin bekor qilindi!")
+    else:
+        await update.message.reply_text("O'yin boshlangan, bekor qilib bo'lmaydi!")
+
+
 async def addbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user = update.effective_user
@@ -843,14 +1067,17 @@ async def addbot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     game = games[chat_id]
     args = context.args
-    count = 1
+    available = MAX_PLAYERS - len(game.players)
+    count = available
     if args:
         try: count = int(args[0])
-        except: await update.message.reply_text("Son yozing! Masalan: /addbot 3"); return
-    if count < 1 or count > 10:
-        await update.message.reply_text("1-10 gacha bot qo'shishingiz mumkin!"); return
-    if len(game.players) + count > MAX_PLAYERS:
-        await update.message.reply_text(f"Ko'pi bilan {MAX_PLAYERS} o'yinchi bo'lishi mumkin!"); return
+        except: await update.message.reply_text("Son yozing! Masalan: /addbot 5"); return
+    if count < 5:
+        await update.message.reply_text("Kamida 5 ta bot qo'shishingiz mumkin!"); return
+    if count > 30:
+        await update.message.reply_text("Ko'pi bilan 30 ta bot qo'shishingiz mumkin!"); return
+    if count > available:
+        await update.message.reply_text(f"Ko'pi bilan {available} ta bot qo'shish mumkin!"); return
     added = 0
     for i in range(count):
         bid = -(len(game.players) + i + 1)
@@ -898,7 +1125,7 @@ async def start_gameplay(update, context, game):
         p.role = role
         if role in ("Don", "Mafia"):
             p.team = "mafia"
-        elif role in ("Manyak", "Ubica", "Zombi"):
+        elif role in ("Manyak", "Ubica"):
             p.team = "neutral"
         else:
             p.team = "village"
@@ -910,12 +1137,14 @@ async def start_gameplay(update, context, game):
     start_kb = InlineKeyboardMarkup([[InlineKeyboardButton("🤖 Botga o'tish", url=f"https://t.me/{bot_username}")]])
     await send_safe(context, chat_id, animation=NIGHT_GIF, caption=f"🌙 *{count} o'yinchi bilan o'yin boshlandi!*\n1-tun boshlanishi...\n\nRolingizni bilish uchun botga o'ting \u2193", parse_mode="Markdown", reply_markup=start_kb)
     for p in players:
+        if p.is_bot:
+            continue
         try:
-            await context.bot.send_message(p.user_id, f"Sizning rolingiz: {ROLE_ICON.get(p.role,'')} {ROLE_DISPLAY.get(p.role,p.role)}\n\n{ROLE_HELP.get(p.role,'')}")
+            await context.bot.send_message(p.user_id, f"🎭 Sizning rolingiz: {ROLE_ICON.get(p.role,'')} {ROLE_DISPLAY.get(p.role,p.role)}\n\n{ROLE_HELP.get(p.role,'')}\n\nTungi harakatni bajarish uchun guruhdagi tugmalardan foydalaning!")
         except:
             pass
     await asyncio.sleep(3)
-    await night_phase(context, game)
+    game.game_task = asyncio.create_task(game_loop(context, game))
 
 
 ROLE_HELP = {
@@ -950,34 +1179,70 @@ ROLE_HELP = {
 }
 
 
+async def game_loop(context, game):
+    chat_id = game.chat_id
+    try:
+        while True:
+            if chat_id not in games:
+                break
+            if game.phase == "night":
+                await night_phase(context, game)
+            if chat_id not in games:
+                break
+            if game.phase == "day":
+                await day_phase(context, game)
+            if chat_id not in games or game.phase == "registration":
+                break
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logging.critical(f"game_loop chat {chat_id}: {e}", exc_info=True)
+        try:
+            await send_safe(context, chat_id, text="❌ O'yin xatolik tufayli to'xtatildi.")
+        except:
+            pass
+        games.pop(chat_id, None)
+        ghosts.pop(chat_id, None)
+
+
 async def night_phase(context, game):
     chat_id = game.chat_id
-    game.phase = "night"
-    game.day += 1
-    game.actions = {}
-    game.votes = {}
-    game.doc_choice = None
-    game.maniac_target = None
-    game.advokat_target = None
-    game.serjant_choice = None
-    game.don_target = None
-    game.mafia_targets = {}
-    game.muxlis_target = None
-    game.majnun_target = None
-    game.mine_target = None
-    game.blocked_players = set()
-    alive = game.alive_players
-    if len(alive) < 2:
-        await end_game(context, game)
-        return
-    for p in alive:
-        if p.is_bot:
-            await auto_bot_night_action(context, game, p)
-        else:
-            await send_night_actions(context, game, p)
-    setts = get_set(chat_id)
-    await asyncio.sleep(setts["night"])
-    await resolve_night(context, game)
+    try:
+        save_games()
+        game.phase = "night"
+        game.day += 1
+        game.actions = {}
+        game.votes = {}
+        game.doc_choice = None
+        game.maniac_target = None
+        game.advokat_target = None
+        game.serjant_choice = None
+        game.don_target = None
+        game.mafia_targets = {}
+        game.muxlis_target = None
+        game.majnun_target = None
+        game.mine_target = None
+        game.blocked_players = set()
+        alive = game.alive_players
+        if len(alive) < 2:
+            await end_game(context, game)
+            return
+        for p in alive:
+            if p.is_bot:
+                await auto_bot_night_action(context, game, p)
+            else:
+                await send_night_actions(context, game, p)
+        setts = get_set(chat_id)
+        await asyncio.sleep(setts["night"])
+        await resolve_night(context, game)
+    except Exception as e:
+        logging.critical(f"night_phase crash in chat {chat_id}: {e}", exc_info=True)
+        try:
+            await send_safe(context, chat_id, text="❌ Tunda xatolik yuz berdi. O'yin to'xtatildi.")
+        except:
+            pass
+        games.pop(chat_id, None)
+        ghosts.pop(chat_id, None)
 
 
 async def auto_bot_night_action(context, game, bot):
@@ -1113,213 +1378,223 @@ async def send_night_actions(context, game, p):
         kb = InlineKeyboardMarkup([[InlineKeyboardButton("Kutish ✅", callback_data=f"wait:{game.day}")]])
     try:
         await context.bot.send_message(p.user_id, text, reply_markup=kb)
-    except Exception as e:
-        logging.error(f"send_night to {p.user_id}: {e}")
+    except:
+        pass
 
 
 async def resolve_night(context, game):
     chat_id = game.chat_id
-    kills = set()
-    protected = set()
-    doc_save = set()
-    daydi_visitors = {}
+    try:
+        kills = set()
+        protected = set()
+        doc_save = set()
+        daydi_visitors = {}
 
-    actions_snapshot = dict(game.actions)
-    for uid, action in actions_snapshot.items():
-        player = game.get_player(uid)
-        if not player or not player.alive:
-            continue
-        target_id = action.get("target")
-        atype = action.get("type", "")
+        actions_snapshot = dict(game.actions)
+        for uid, action in actions_snapshot.items():
+            player = game.get_player(uid)
+            if not player or not player.alive:
+                continue
+            target_id = action.get("target")
+            atype = action.get("type", "")
 
-        if atype == "don_kill" and target_id:
-            game.don_target = target_id
-        elif atype == "mafia_vote" and target_id:
-            game.mafia_targets[uid] = target_id
-        elif atype == "doc_heal" and target_id:
-            game.doc_choice = target_id
-        elif atype == "kom_check" and target_id:
-            if game.day > 1:
+            if atype == "don_kill" and target_id:
+                game.don_target = target_id
+            elif atype == "mafia_vote" and target_id:
+                game.mafia_targets[uid] = target_id
+            elif atype == "doc_heal" and target_id:
+                game.doc_choice = target_id
+            elif atype == "kom_check" and target_id:
+                if game.day > 1:
+                    tp = game.get_player(target_id)
+                    if tp:
+                        res = "Mafiya" if tp.team in ("mafia", "neutral") else "Fuqaro"
+                        try:
+                            await context.bot.send_message(uid, f"🔍 Natija: {res}")
+                        except:
+                            pass
+            elif atype == "kom_kill" and target_id:
+                kills.add(target_id)
+            elif atype == "maniac_kill" and target_id:
+                game.maniac_target = target_id
+            elif atype == "adv_protect" and target_id:
+                game.advokat_target = target_id
+            elif atype == "guard_protect" and target_id:
+                protected.add(target_id)
+            elif atype == "serjant_vote" and target_id:
+                game.serjant_choice = target_id
+            elif atype == "daydi_visit" and target_id:
+                if target_id not in daydi_visitors:
+                    daydi_visitors[target_id] = []
+                daydi_visitors[target_id].append(uid)
+            elif atype == "afer_blok" and target_id:
+                game.blocked_players.add(target_id)
+            elif atype == "kimyo_poison" and target_id:
+                kills.add(target_id)
+            elif atype == "mergan_shoot" and target_id:
+                kills.add(target_id)
+            elif atype == "ubica_kill" and target_id:
+                kills.add(target_id)
+            elif atype == "sehr_magic" and target_id:
+                game.blocked_players.add(target_id)
+            elif atype == "tentak_stick" and target_id:
+                game.blocked_players.add(target_id)
+            elif atype == "sotuv_sell" and target_id:
+                add_item(target_id, "rifle", 1)
+            elif atype == "donx_check" and target_id:
                 tp = game.get_player(target_id)
                 if tp:
-                    res = "Mafiya" if tp.team in ("mafia", "neutral") else "Fuqaro"
+                    res = "Mafiya" if tp.team == "mafia" else "Fuqaro"
                     try:
                         await context.bot.send_message(uid, f"🔍 Natija: {res}")
                     except:
                         pass
-        elif atype == "kom_kill" and target_id:
-            kills.add(target_id)
-        elif atype == "maniac_kill" and target_id:
-            game.maniac_target = target_id
-        elif atype == "adv_protect" and target_id:
-            game.advokat_target = target_id
-        elif atype == "guard_protect" and target_id:
-            protected.add(target_id)
-        elif atype == "serjant_vote" and target_id:
-            game.serjant_choice = target_id
-        elif atype == "daydi_visit" and target_id:
-            if target_id not in daydi_visitors:
-                daydi_visitors[target_id] = []
-            daydi_visitors[target_id].append(uid)
-        elif atype == "afer_blok" and target_id:
-            game.blocked_players.add(target_id)
-        elif atype == "kimyo_poison" and target_id:
-            kills.add(target_id)
-        elif atype == "mergan_shoot" and target_id:
-            kills.add(target_id)
-        elif atype == "ubica_kill" and target_id:
-            kills.add(target_id)
-        elif atype == "sehr_magic" and target_id:
-            game.blocked_players.add(target_id)
-        elif atype == "tentak_stick" and target_id:
-            game.blocked_players.add(target_id)
-        elif atype == "sotuv_sell" and target_id:
-            add_item(target_id, "rifle", 1)
-        elif atype == "donx_check" and target_id:
-            tp = game.get_player(target_id)
-            if tp:
-                res = "Mafiya" if tp.team == "mafia" else "Fuqaro"
+            elif atype == "muxlis_watch" and target_id:
+                game.muxlis_target = target_id
+            elif atype == "majnun_bond" and target_id:
+                game.majnun_target = target_id
+            elif atype == "oqit_teach" and target_id:
                 try:
-                    await context.bot.send_message(uid, f"🔍 Natija: {res}")
+                    await context.bot.send_message(target_id, "📚 O'qituvchi sizga dars berdi! Keyingi ovozingiz 2 hisoblanadi.")
                 except:
                     pass
-        elif atype == "muxlis_watch" and target_id:
-            game.muxlis_target = target_id
-        elif atype == "majnun_bond" and target_id:
-            game.majnun_target = target_id
-        elif atype == "oqit_teach" and target_id:
-            try:
-                await context.bot.send_message(target_id, "📚 O'qituvchi sizga dars berdi! Keyingi ovozingiz 2 hisoblanadi.")
-            except:
+            elif atype == "oshik_visit" and target_id:
+                tp = game.get_player(target_id)
+                if tp and tp.role == "Mashuqa":
+                    try:
+                        await context.bot.send_message(uid, "💕 Siz sevganingizni topdingiz!")
+                        await context.bot.send_message(target_id, "💕 Oshigingiz sizni topdi!")
+                    except:
+                        pass
+            elif atype == "mashuqa_visit" and target_id:
                 pass
-        elif atype == "oshik_visit" and target_id:
-            tp = game.get_player(target_id)
-            if tp and tp.role == "Mashuqa":
+
+        for target_id, visitors in daydi_visitors.items():
+            for daydi_uid in visitors:
+                names = []
+                for v_uid in visitors:
+                    vp = game.get_player(v_uid)
+                    if vp and v_uid != daydi_uid:
+                        names.append(vp.display)
+                if names:
+                    try:
+                        await context.bot.send_message(daydi_uid, f"👤 Sizga tashrif buyurganlar: {', '.join(names)}")
+                    except:
+                        pass
+
+        # Mafia kill voting
+        game.don_target = None
+        mafia_votes = {}
+        for uid, action in actions_snapshot.items():
+            if action.get("type") == "don_kill":
+                game.don_target = action.get("target")
+            elif action.get("type") == "mafia_vote":
+                mafia_votes[uid] = action.get("target")
+
+        if mafia_votes:
+            from collections import Counter
+            c = Counter(mafia_votes.values())
+            if c:
+                mc = c.most_common(1)[0]
+                if mc[1] >= 2:
+                    kills.add(mc[0])
+                elif game.don_target:
+                    kills.add(game.don_target)
+                elif mc:
+                    kills.add(mc[0])
+        if not kills and game.don_target:
+            kills.add(game.don_target)
+        if game.maniac_target:
+            kills.add(game.maniac_target)
+
+        if game.serjant_choice:
+            protected.add(game.serjant_choice)
+
+        killed_players = []
+        saved_by_doc = False
+        saved_by_adv = False
+        for tid in kills:
+            tp = game.get_player(tid)
+            if tp and tp.alive and tp.user_id in game.blocked_players:
                 try:
-                    await context.bot.send_message(uid, "💕 Siz sevganingizni topdingiz!")
-                    await context.bot.send_message(target_id, "💕 Oshigingiz sizni topdi!")
+                    await context.bot.send_message(tid, "🔒 Siz bloklangansiz! Hech qanday zarar yetmadi.")
                 except:
                     pass
-        elif atype == "mashuqa_visit" and target_id:
-            pass
-
-    for target_id, visitors in daydi_visitors.items():
-        for daydi_uid in visitors:
-            names = []
-            for v_uid in visitors:
-                vp = game.get_player(v_uid)
-                if vp and v_uid != daydi_uid:
-                    names.append(vp.display)
-            if names:
-                try:
-                    await context.bot.send_message(daydi_uid, f"👤 Sizga tashrif buyurganlar: {', '.join(names)}")
-                except:
-                    pass
-
-    # Mafia kill voting
-    game.don_target = None
-    mafia_votes = {}
-    for uid, action in actions_snapshot.items():
-        if action.get("type") == "don_kill":
-            game.don_target = action.get("target")
-        elif action.get("type") == "mafia_vote":
-            mafia_votes[uid] = action.get("target")
-
-    if mafia_votes:
-        from collections import Counter
-        c = Counter(mafia_votes.values())
-        if c:
-            mc = c.most_common(1)[0]
-            if mc[1] >= 2:
-                kills.add(mc[0])
-            elif game.don_target:
-                kills.add(game.don_target)
-            elif mc:
-                kills.add(mc[0])
-    if not kills and game.don_target:
-        kills.add(game.don_target)
-    if game.maniac_target:
-        kills.add(game.maniac_target)
-
-    if game.serjant_choice:
-        protected.add(game.serjant_choice)
-
-    killed_players = []
-    saved_by_doc = False
-    saved_by_adv = False
-    for tid in kills:
-        tp = game.get_player(tid)
-        if tp and tp.alive and tp.user_id in game.blocked_players:
-            try:
-                await context.bot.send_message(tid, "🔒 Siz bloklangansiz! Hech qanday zarar yetmadi.")
-            except:
-                pass
-            continue
-        if tid in protected or game.doc_choice == tid:
-            if game.doc_choice == tid:
-                saved_by_doc = True
-            if tid in protected:
+                continue
+            if tid in protected or game.doc_choice == tid:
+                if game.doc_choice == tid:
+                    saved_by_doc = True
+                if tid in protected:
+                    saved_by_adv = True
+                continue
+            if game.advokat_target == tid:
                 saved_by_adv = True
-            continue
-        if game.advokat_target == tid:
-            saved_by_adv = True
-            continue
-        if has_item(tid, "shield") and remove_item(tid, "shield"):
+                continue
+            if has_item(tid, "shield") and remove_item(tid, "shield"):
+                try:
+                    await context.bot.send_message(tid, "🛡 Himoya qutqardi!")
+                except:
+                    pass
+                continue
+            target = game.get_player(tid)
+            if target and target.alive:
+                prof = get_profile(tid)
+                if prof.get("hero") and random.random() < prof.get("hero_defense", 0) * 0.01:
+                    try:
+                        await context.bot.send_message(tid, "🦸 Qahramon qutqardi!")
+                    except:
+                        pass
+                    continue
+                if target.role == "Omadli" and random.random() < 0.5:
+                    try:
+                        await context.bot.send_message(tid, "🍀 Omad qutqardi!")
+                    except:
+                        pass
+                    continue
+                target.alive = False
+                killed_players.append(target)
+
+        # Serjant -> Komissar (endigina o'lganlardan keyin)
+        komissar_dead = True
+        serjant_alive = None
+        for p in game.players.values():
+            if p.role == "Komissar" and p.alive:
+                komissar_dead = False
+            if p.role == "Serjant" and p.alive:
+                serjant_alive = p
+        if komissar_dead and serjant_alive:
+            serjant_alive.role = "Komissar"
+            serjant_alive.team = "village"
             try:
-                await context.bot.send_message(tid, "🛡 Himoya qutqardi!")
+                await context.bot.send_message(serjant_alive.user_id, "🕵️‍♂️ Komissar o'ldi! Endi siz yangi Komissarsiz!")
             except:
                 pass
-            continue
-        target = game.get_player(tid)
-        if target and target.alive:
-            prof = get_profile(tid)
-            if prof.get("hero") and random.random() < prof.get("hero_defense", 0) * 0.01:
-                try:
-                    await context.bot.send_message(tid, "🦸 Qahramon qutqardi!")
-                except:
-                    pass
-                continue
-            if target.role == "Omadli" and random.random() < 0.5:
-                try:
-                    await context.bot.send_message(tid, "🍀 Omad qutqardi!")
-                except:
-                    pass
-                continue
-            target.alive = False
-            killed_players.append(target)
 
-    # Serjant -> Komissar (endigina o'lganlardan keyin)
-    komissar_dead = True
-    serjant_alive = None
-    for p in game.players.values():
-        if p.role == "Komissar" and p.alive:
-            komissar_dead = False
-        if p.role == "Serjant" and p.alive:
-            serjant_alive = p
-    if komissar_dead and serjant_alive:
-        serjant_alive.role = "Komissar"
-        serjant_alive.team = "village"
+        if killed_players:
+            names = ", ".join(fmt_player(p) for p in killed_players)
+            await send_safe(context, chat_id, text=f"☠ O'ldirildi:\n{names}", parse_mode="HTML")
+        else:
+            msg = []
+            if saved_by_doc:
+                msg.append("🏥 Shifokor bir kishini o'limdan qutqardi!")
+            if saved_by_adv:
+                msg.append("⚖ Advokat bir kishini himoya qildi!")
+            if not msg:
+                msg.append("☀ Bugun hech kim o'lmadi.")
+            await send_safe(context, chat_id, text="\n".join(msg))
+
+        save_games()
+        await send_safe(context, chat_id, animation=DAY_GIF, caption=f"☀ {game.day}-kun boshlandi!")
+        game.phase = "day"
+        await check_win(context, game)
+    except Exception as e:
+        logging.critical(f"resolve_night crash in chat {chat_id}: {e}", exc_info=True)
         try:
-            await context.bot.send_message(serjant_alive.user_id, "🕵️‍♂️ Komissar o'ldi! Endi siz yangi Komissarsiz!")
+            await send_safe(context, chat_id, text="❌ Tun natijalarida xatolik. O'yin to'xtatildi.")
         except:
             pass
-
-    if killed_players:
-        names = ", ".join(fmt_player(p) for p in killed_players)
-        await send_safe(context, chat_id, text=f"☠ O'ldirildi:\n{names}", parse_mode="HTML")
-    else:
-        msg = []
-        if saved_by_doc:
-            msg.append("🏥 Shifokor bir kishini o'limdan qutqardi!")
-        if saved_by_adv:
-            msg.append("⚖ Advokat bir kishini himoya qildi!")
-        if not msg:
-            msg.append("☀ Bugun hech kim o'lmadi.")
-        await send_safe(context, chat_id, text="\n".join(msg))
-
-    await send_safe(context, chat_id, animation=DAY_GIF, caption=f"☀ {game.day}-kun boshlandi!")
-    game.phase = "day"
-    await check_win(context, game)
+        games.pop(chat_id, None)
+        ghosts.pop(chat_id, None)
 
 
 async def check_win(context, game):
@@ -1344,65 +1619,77 @@ async def check_win(context, game):
 
 async def day_phase(context, game):
     chat_id = game.chat_id
-    setts = get_set(chat_id)
-    game.votes = {}
-    alive = game.alive_players
-    if len(alive) < 2:
-        await end_game(context, game)
-        return
-    text = f"☀ {game.day}-kun boshlandi!\n\nTirik o'yinchilar ({len(alive)}/{len(game.players)}):\n"
-    for i, p in enumerate(alive, 1):
-        text += f"{i}. {p.display}\n"
-    text += f"\nUlardan kimlar:\n"
-    role_list = {}
-    for p in game.players.values():
-        r = p.role
-        if r:
-            role_list[r] = role_list.get(r, 0) + 1
-    for r, c in sorted(role_list.items(), key=lambda x: x[0]):
-        text += f"{ROLE_ICON.get(r,'')} {ROLE_DISPLAY.get(r,r)} - {c}, "
-    text = text.rstrip(", ") + f"\nJami: {len(alive)} kishi.\n\nTunda bo'lgan xodisalarni muxokama qilishning ayni vaqti..."
-    kb = []
-    row = []
-    for p in alive:
-        row.append(InlineKeyboardButton(f"{ROLE_ICON.get(p.role,'')} {p.display}", callback_data=f"vote:{game.day}:{p.user_id}"))
-        if len(row) == 2:
+    try:
+        setts = get_set(chat_id)
+        game.votes = {}
+        alive = game.alive_players
+        if len(alive) < 2:
+            await end_game(context, game)
+            return
+        text = f"☀ {game.day}-kun boshlandi!\n\nTirik o'yinchilar ({len(alive)}/{len(game.players)}):\n"
+        for i, p in enumerate(alive, 1):
+            text += f"{i}. {p.display}\n"
+        text += f"\nUlardan kimlar:\n"
+        role_list = {}
+        for p in game.players.values():
+            r = p.role
+            if r:
+                role_list[r] = role_list.get(r, 0) + 1
+        for r, c in sorted(role_list.items(), key=lambda x: x[0]):
+            text += f"{ROLE_ICON.get(r,'')} {ROLE_DISPLAY.get(r,r)} - {c}, "
+        text = text.rstrip(", ") + f"\nJami: {len(alive)} kishi.\n\nTunda bo'lgan xodisalarni muxokama qilishning ayni vaqti..."
+        kb = []
+        row = []
+        for p in alive:
+            row.append(InlineKeyboardButton(f"{ROLE_ICON.get(p.role,'')} {p.display}", callback_data=f"vote:{game.day}:{p.user_id}"))
+            if len(row) == 2:
+                kb.append(row)
+                row = []
+        if row:
             kb.append(row)
-            row = []
-    if row:
-        kb.append(row)
-    kb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
-    await send_safe(context, chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
-    for p in alive:
-        if p.is_bot: continue
+        kb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
+        await send_safe(context, chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="HTML")
+        for p in alive:
+            if p.is_bot: continue
+            try:
+                pkb = []
+                prow = []
+                for tp in alive:
+                    if tp.user_id != p.user_id:
+                        prow.append(InlineKeyboardButton(tp.display, callback_data=f"vote:{game.day}:{tp.user_id}"))
+                        if len(prow) == 2:
+                            pkb.append(prow); prow = []
+                if prow: pkb.append(prow)
+                pkb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
+                await context.bot.send_message(p.user_id, f"☀ {game.day}-kun. Ovoz berish:", reply_markup=InlineKeyboardMarkup(pkb))
+            except:
+                pass
+        for p in alive:
+            if p.is_bot:
+                targets = [tp.user_id for tp in alive if tp.user_id != p.user_id]
+                if targets: game.votes[p.user_id] = random.choice(targets)
+        asyncio.create_task(bot_discussion(context, game))
+        await asyncio.sleep(setts["vote"])
+        await resolve_vote(context, game)
+    except Exception as e:
+        logging.critical(f"day_phase crash in chat {chat_id}: {e}", exc_info=True)
         try:
-            pkb = []
-            prow = []
-            for tp in alive:
-                if tp.user_id != p.user_id:
-                    prow.append(InlineKeyboardButton(tp.display, callback_data=f"vote:{game.day}:{tp.user_id}"))
-                    if len(prow) == 2:
-                        pkb.append(prow); prow = []
-            if prow: pkb.append(prow)
-            pkb.append([InlineKeyboardButton("O'tkazib yuborish", callback_data=f"vskip:{game.day}")])
-            await context.bot.send_message(p.user_id, f"☀ {game.day}-kun. Ovoz berish:", reply_markup=InlineKeyboardMarkup(pkb))
+            await send_safe(context, chat_id, text="❌ Kunduzgi fazada xatolik. O'yin to'xtatildi.")
         except:
             pass
-    for p in alive:
-        if p.is_bot:
-            targets = [tp.user_id for tp in alive if tp.user_id != p.user_id]
-            if targets: game.votes[p.user_id] = random.choice(targets)
-    asyncio.create_task(bot_discussion(context, game))
-    await asyncio.sleep(setts["vote"])
-    await resolve_vote(context, game)
+        games.pop(chat_id, None)
+        ghosts.pop(chat_id, None)
 
 
 async def bot_discussion(context, game):
+    chat_id = game.chat_id
+    if chat_id not in games:
+        return
     bot_alive = [p for p in game.alive_players if p.is_bot]
     if not bot_alive: return
-    chat_id = game.chat_id
     for _ in range(random.randint(1, 3)):
-        if game.phase != "day": return
+        if chat_id not in games or game.phase != "day":
+            return
         bot = random.choice(bot_alive)
         phrase = random.choice(BOT_DISCUSSIONS)
         alive_names = [p.first_name for p in game.alive_players if not p.is_bot and p.user_id != bot.user_id]
@@ -1475,6 +1762,7 @@ async def resolve_vote(context, game):
         else:
             rd = f"{ROLE_ICON.get(ejected.role,'')} {ROLE_DISPLAY.get(ejected.role,ejected.role)}"
             await send_safe(context, chat_id, text=f"{ejected.display} chiqarildi! Rol: {rd}", parse_mode="HTML")
+    save_games()
     await check_win(context, game)
 
 
@@ -1544,6 +1832,7 @@ async def end_game(context, game, winner=None):
         w["players"][uid_str]["score"] = w["players"][uid_str].get("score", 0) + (3 if was_winner else 1)
     save_weekly(w)
     flush_profiles()
+    save_games()
     del games[chat_id]
     ghosts.pop(chat_id, None)
 
@@ -1761,16 +2050,20 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"📊 O'yinlar: {prof.get('games',0)} | G'alaba: {prof.get('wins',0)} | Mag'lubiyat: {prof.get('losses',0)}")
 
 
-async def setimage(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    if user.id != ADMIN_ID:
-        await update.message.reply_text("Faqat admin!")
-        return
-    awaiting_image.add(user.id)
-    await update.message.reply_text("Rasm yuboring, men uni game rasmi qilib qo'yaman.")
-
-
 # ────────── CALLBACK HANDLER ──────────
+
+async def safe_edit(query, text, reply_markup=None, parse_mode="HTML", disable_web_page_preview=False):
+    try:
+        if query.message.photo or query.message.animation:
+            await query.edit_message_caption(caption=text, parse_mode=parse_mode, reply_markup=reply_markup)
+            return
+    except:
+        pass
+    try:
+        await query.edit_message_text(text, parse_mode=parse_mode, reply_markup=reply_markup, disable_web_page_preview=disable_web_page_preview)
+    except:
+        pass
+
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1781,6 +2074,233 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if check_flood(user_id):
         await query.answer("Sekinroq!")
+        return
+
+    if data == "start_join":
+        await query.answer("O'yin bor guruhda /join yozing yoki joingame tugmasini bosing!")
+        return
+    if data == "start_profile":
+        u = query.from_user
+        prof = get_profile(u.id, u.first_name, u.username)
+        items_str = ""
+        for item_id, item_name in ITEM_NAMES.items():
+            item_data = prof["items"].get(item_id, {"count": 0, "active": True})
+            items_str += f"{'✅' if item_data['active'] else '❌'} {item_name}: {item_data['count']}\n"
+        hero_str = f"✅ Hujum: {prof.get('hero_attack',0)}, Himoya: {prof.get('hero_defense',0)}" if prof.get("hero") else "❌ Sotib olinmagan"
+        role_str = prof.get("bought_role") or "Yo'q"
+        text = (
+            f"👤 <b>{u.first_name}</b>\n\n"
+            f"💎 Olmos: <b>{prof['olmos']}</b>\n"
+            f"💵 Dollar: <b>{prof['dollars']}</b>\n"
+            f"💶 Evro: <b>{prof.get('evro',0)}</b>\n\n"
+            f"📦 <b>Itemlar:</b>\n{items_str}"
+            f"🦸 <b>Hero:</b> {hero_str}\n"
+            f"🎭 <b>Rol:</b> {role_str}\n\n"
+            f"📊 O'yinlar: <b>{prof.get('games',0)}</b> | "
+            f"G'alaba: <b>{prof.get('wins',0)}</b> | "
+            f"Mag'lubiyat: <b>{prof.get('losses',0)}</b>"
+        )
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🦸 Hero sotib olish", callback_data="buyhero")],
+            [InlineKeyboardButton("🎭 Rol sotib olish", callback_data="buyrole")],
+            [InlineKeyboardButton("💳 To'lov", callback_data="payment")],
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+        ]))
+        return
+    if data == "start_money":
+        u = query.from_user
+        prof = get_profile(u.id, u.first_name, u.username)
+        text = (
+            f"💰 <b>Hisobingiz</b>\n\n"
+            f"💎 Olmos: <b>{prof['olmos']}</b>\n"
+            f"💵 Dollar: <b>{prof['dollars']}</b>\n"
+            f"💶 Evro: <b>{prof.get('evro',0)}</b>\n\n"
+            f"💱 <b>/change sum</b> — Olmosni Evroga almashtirish\n"
+            f"📤 <b>/send @user sum</b> — Dollar yuborish"
+        )
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+        ]))
+        return
+    if data == "start_top":
+        s = load_stats()
+        profs = load_profiles()
+        sorted_u = sorted(s.items(), key=lambda x: x[1].get("wins", 0), reverse=True)[:20]
+        text = "🏆 <b>TOP REYTING</b> 🏆\n\n"
+        for i, (uid, st) in enumerate(sorted_u, 1):
+            name = profs.get(uid, {}).get("name", uid)
+            text += f"{i}. {name}: {st.get('wins',0)} g'alaba ({st.get('games',0)} o'yin)\n"
+        if not sorted_u:
+            text += "Statistika yo'q."
+        text += "\n\n🎁 <b>Sovrinlar:</b>\n🥇 Top 1: 200💰 Evro\n🥈 Top 2-5: 100💰 Evro\n🥉 Top 6-50: 50💰 Evro"
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 Haftalik reyting", callback_data="start_weekly")],
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+        ]))
+        return
+    if data == "start_weekly":
+        await query.answer()
+        w = load_weekly()
+        profs = load_profiles()
+        players = w.get("players", {})
+        if not players:
+            text = "📅 Bu hafta hali hech kim o'ynamadi!"
+        else:
+            sorted_u = sorted(players.items(), key=lambda x: x[1].get("score", 0), reverse=True)[:20]
+            text = "📅 <b>HAFTA REYTINGI</b> 📅\n\n"
+            for i, (uid_str, data) in enumerate(sorted_u, 1):
+                name = profs.get(uid_str, {}).get("name", uid_str)
+                score = data.get("score", 0)
+                text += f"{i}. {name}: {score} ball\n"
+            text += "\n🎁 <b>Sovrinlar:</b>\n"
+            text += "🥇 Top 1: 45💎 Olmos\n🥈 Top 2-10: 10💎 Olmos\n"
+            text += "🥉 Top 11-20: 4💎 Olmos\n🏅 Top 21-50: 500💰 Evro"
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_top")],
+        ]))
+        return
+    if data == "start_shop":
+        u = query.from_user
+        prof = get_profile(u.id, u.first_name, u.username)
+        kb = [[InlineKeyboardButton(f"{n} - {ITEM_PRICES[i]} olmos", callback_data=f"buy:{i}")] for i, n in ITEM_NAMES.items()]
+        kb.append([InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")])
+        text = f"🛒 <b>Do'kon</b>\n💎 Olmos: <b>{prof['olmos']}</b>"
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup(kb))
+        return
+    if data == "start_stats":
+        u = query.from_user
+        prof = get_profile(u.id, u.first_name, u.username)
+        total_games = prof.get('games', 0)
+        wins = prof.get('wins', 0)
+        losses = prof.get('losses', 0)
+        pct = wins / max(total_games, 1) * 100
+        text = (
+            f"📊 <b>Statistika</b>\n\n"
+            f"🎮 O'yinlar: <b>{total_games}</b>\n"
+            f"🏆 G'alaba: <b>{wins}</b>\n"
+            f"💔 Mag'lubiyat: <b>{losses}</b>\n"
+            f"📈 G'alaba %: <b>{pct:.1f}%</b>"
+        )
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+        ]))
+        return
+    if data == "start_settings":
+        await query.answer()
+        if user_id == ADMIN_ID:
+            text = "⚙️ <b>Admin sozlamalari</b>\n\n/settings — joriy sozlamalar\n/set param value — o'zgartirish\n/setimage — o'yin rasmini o'zgartirish"
+            await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+            ]))
+        else:
+            await query.answer("Faqat admin! /help yordam", show_alert=True)
+        return
+    if data == "start_help":
+        await query.answer()
+        text = (
+            "📖 <b>Yordam</b>\n\n"
+            "🎮 <b>O'yin buyruqlari (guruhda):</b>\n"
+            "/mafia — O'yin yaratish\n"
+            "/join — Qo'shilish\n"
+            "/leave — Chiqish\n"
+            "/players — O'yinchilar ro'yxati\n"
+            "/startgame — Boshlash (admin)\n"
+            "/addbot son — AI bot qo'shish (admin)\n"
+            "/vote @user — Ovoz berish\n"
+            "/defend — Himoya so'zi\n"
+            "/status — O'yin holati\n"
+            "/cancel — O'yinni bekor qilish (admin)\n\n"
+            "👤 <b>Shaxsiy buyruqlar:</b>\n"
+            "/profile — Profil\n"
+            "/money — Hisob\n"
+            "/shop — Do'kon\n"
+            "/geroyinfo — Hero haqida\n"
+            "/send @user sum — Dollar yuborish\n"
+            "/change sum — Olmos → Evro\n"
+            "/top — Umumiy reyting\n"
+            "/hafta — Haftalik reyting\n"
+            "/stats — Shaxsiy statistika\n"
+            "/g xabar — Ghost chat\n\n"
+            "Admin buyruqlari:\n"
+            "/give @user sum — Olmos berish\n"
+            "/gsend @user sum tur — Pul berish\n"
+            "/giveaway sum — Tasodifiy o'yinchi\n"
+            "/set param value — Sozlash\n"
+            "/setimage — Rasm o'rnatish"
+        )
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+        ]))
+        return
+    if data == "start_about":
+        await query.answer()
+        text = (
+            "ℹ️ <b>Night Killers Bot</b>\n\n"
+            "🌙 <b>Versiya:</b> 2.0\n"
+            "🎭 <b>Rollar:</b> 27 xil rol\n"
+            "🤖 <b>AI:</b> Aqlli bot o'yinchilar\n"
+            "👥 <b>Maks:</b> 100 o'yinchi\n"
+            "💎 <b>Iqtisod:</b> Olmos, Dollar, Evro\n"
+            "🦸 <b>Hero:</b> Maxsus qahramon tizimi\n"
+            "📅 <b>Haftalik:</b> Bonus va sovrinlar\n\n"
+            "👨‍💻 <b>Admin:</b> @russell01717\n"
+            "📢 <b>Kanal:</b> @nighkillers\n\n"
+            "Powered by <b>python-telegram-bot</b>"
+        )
+        await safe_edit(query, text, reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔙 Orqaga", callback_data="start_back")],
+        ]))
+        return
+    if data == "start_back":
+        await query.answer()
+        try:
+            bot_user = await context.bot.get_me()
+            bot_username = bot_user.username
+        except:
+            bot_username = "NightKillersBot"
+        caption = (
+            f"<b>🌙 NIGHT KILLERS</b>\n"
+            f"<i>Zulmatda hech kim begunoh emas...</i>\n\n"
+            f"👤 <b>{query.from_user.first_name}</b>, sizni <b>Night Killers</b> olamiga xush kelibsiz!\n"
+            f"Bu yerda sir, qo'rquv va raqobat hukm suradi.\n\n"
+            f"━━━━━━━━━━━━━━━━\n\n"
+            f"🎯 <b>Nega aynan biz?</b>\n\n"
+            f"🌙 <b>27 xil rol</b> bilan murakkab o'yin tizimi\n"
+            f"🤖 <b>Aqlli AI botlar</b> bilan har doim to'liq o'yin\n"
+            f"🏆 <b>Kundalik va haftalik reyting</b>\n"
+            f"💎 <b>Olmos, dollar, evro</b> — to'liq iqtisod tizimi\n"
+            f"🎖 <b>Hero va maxsus itemlar</b> — ustunlik siz tomonda\n"
+            f"🔥 <b>100+ o'yinchi</b> bilan faol hamjamiyat\n\n"
+            f"━━━━━━━━━━━━━━━━\n\n"
+            f"⚡ <b>O'ynash uchun:</b>\n"
+            f"1⃣ Guruhga <b>@NightKillersBot</b> qo'shing\n"
+            f"2⃣ <b>/mafia</b> yozib o'yin yarating\n"
+            f"3⃣ <b>/join</b> yoki tugmani bosing\n"
+            f"4⃣ Admin <b>/startgame</b> bilan o'yinni boshlaydi\n\n"
+            f"<i>🌙 Hech kimga ishonma. Har bir zulmatda yashirin dushman bor...</i>"
+        )
+        start_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🎮 O'yin yaratish", url=f"https://t.me/{bot_username}?startgroup=new"),
+             InlineKeyboardButton("➕ Qo'shilish", callback_data="start_join")],
+            [InlineKeyboardButton("👤 Profil", callback_data="start_profile"),
+             InlineKeyboardButton("💰 Hisob", callback_data="start_money")],
+            [InlineKeyboardButton("🏆 Reyting", callback_data="start_top"),
+             InlineKeyboardButton("🛒 Do'kon", callback_data="start_shop")],
+            [InlineKeyboardButton("📊 Statistika", callback_data="start_stats"),
+             InlineKeyboardButton("⚙️ Sozlamalar", callback_data="start_settings")],
+            [InlineKeyboardButton("📖 Yordam", callback_data="start_help"),
+             InlineKeyboardButton("ℹ️ Bot haqida", callback_data="start_about")],
+        ])
+        try:
+            if update.callback_query.message.photo or update.callback_query.message.animation:
+                await query.edit_message_caption(caption=caption, parse_mode="HTML", reply_markup=start_kb)
+                return
+        except:
+            pass
+        try:
+            await query.edit_message_text(caption, parse_mode="HTML", reply_markup=start_kb, disable_web_page_preview=True)
+        except:
+            await context.bot.send_message(user_id, caption, parse_mode="HTML", reply_markup=start_kb, disable_web_page_preview=True)
         return
 
     if data == "joingame":
@@ -1801,24 +2321,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ghosts[chat_id].add(user_id)
         await update_game_msg(context, game)
         await query.answer("✅ O'yinga qo'shildingiz!")
+        try:
+            await context.bot.send_message(user_id, "✅ O'yinga qo'shildingiz! O'yin boshlanishini kuting. Rolingizni o'yin boshlanganda olasiz.")
+        except:
+            pass
         return
 
     if data == "payment":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("✅ Pul tushdi", callback_data="check_paid")],
+            [InlineKeyboardButton("📸 Chek yuborish", callback_data="send_check")],
             [InlineKeyboardButton("❌ Bekor qilish", callback_data="cancel_payment")]
         ])
-        await query.edit_message_text(f"💳 To'lov\nKarta: {CARD_NUMBER}\n\nMin: 50 olmos, Max: 10000 olmos\n\nTo'lov qilib, chek rasm yuboring, so'ng 'Pul tushdi' ni bosing.", reply_markup=kb)
-        return
-    if data == "check_paid":
-        await query.edit_message_text("Iltimos, avval chek rasmini yuboring!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("📸 Chek", callback_data="send_check")]]))
+        await safe_edit(query, f"💳 To'lov\nKarta: {CARD_NUMBER}\n\nMin: 50 olmos, Max: 10000 olmos\n\nTo'lov qilish uchun kartaga pul o'tkazing va chek rasmini yuboring.", reply_markup=kb)
         return
     if data == "send_check":
         pending_checks[user_id] = {"step": "waiting_photo"}
-        await query.edit_message_text("Chek rasmini yuboring.")
+        await safe_edit(query, "Chek rasmini yuboring.\n\nKeyin summani yozasiz.")
         return
     if data == "cancel_payment":
-        await query.edit_message_text("Bekor qilindi.")
+        pending_checks.pop(user_id, None)
+        await safe_edit(query, "Bekor qilindi.")
         return
     if data.startswith("confirm_pay:"):
         if user_id != ADMIN_ID:
@@ -1828,8 +2350,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(parts) >= 3:
             tuid = int(parts[1])
             amt = int(parts[2])
+            if amt < 50 or amt > 10000:
+                await query.answer("Noto'g'ri summa!", show_alert=True)
+                return
+            pay_key = f"{tuid}:{amt}"
+            if pay_key in confirmed_payments:
+                await query.answer("Bu to'lov allaqachon tasdiqlangan!", show_alert=True)
+                return
+            confirmed_payments.add(pay_key)
+            save_confirmed_payments()
             add_olmos(tuid, amt)
-            await query.edit_message_text(f"✅ {amt} olmos tasdiqlandi!")
+            try:
+                await query.edit_message_text(f"✅ {amt} olmos tasdiqlandi! (ID: {tuid})")
+            except:
+                pass
             try:
                 await context.bot.send_message(tuid, f"✅ {amt} olmos hisobga tushdi!")
             except:
@@ -1852,17 +2386,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "buyhero":
         prof = get_profile(user_id)
         if prof.get("hero"):
-            await query.edit_message_text("Hero bor!")
+            await safe_edit(query, "Hero bor!")
             return
         if prof["olmos"] < 90:
-            await query.edit_message_text("90 olmos kerak!")
+            await safe_edit(query, "90 olmos kerak!")
             return
         prof["olmos"] -= 90
         prof["hero"] = True
         prof["hero_attack"] = random.randint(5, 15)
         prof["hero_defense"] = random.randint(5, 15)
         save_profile(user_id, prof)
-        await query.edit_message_text(f"🎉 Hero sotib olindi!\n⚔ Hujum: +{prof['hero_attack']}\n🛡 Himoya: +{prof['hero_defense']}")
+        await safe_edit(query, f"🎉 Hero sotib olindi!\n⚔ Hujum: +{prof['hero_attack']}\n🛡 Himoya: +{prof['hero_defense']}")
         return
 
     if data == "buyrole":
@@ -1870,19 +2404,19 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prof = get_profile(user_id)
         for role, price in sorted(ROLE_PRICES.items(), key=lambda x: x[1]):
             kb.append([InlineKeyboardButton(f"{ROLE_ICON.get(role,'')} {ROLE_DISPLAY.get(role,role)} - {price} olmos", callback_data=f"buyrole:{role}")])
-        await query.edit_message_text(f"🎭 Rol sotib olish\n💎 Sizda: {prof['olmos']} olmos", reply_markup=InlineKeyboardMarkup(kb))
+        await safe_edit(query, f"🎭 Rol sotib olish\n💎 Sizda: {prof['olmos']} olmos", reply_markup=InlineKeyboardMarkup(kb))
         return
     if data.startswith("buyrole:"):
         role = data.split(":", 1)[1]
         prof = get_profile(user_id)
         price = ROLE_PRICES.get(role, 0)
         if prof["olmos"] < price:
-            await query.edit_message_text(f"{price} olmos kerak!")
+            await safe_edit(query, f"{price} olmos kerak!")
             return
         prof["olmos"] -= price
         prof["bought_role"] = role
         save_profile(user_id, prof)
-        await query.edit_message_text(f"✅ {ROLE_ICON.get(role,'')} {ROLE_DISPLAY.get(role,role)} sotib olindi!")
+        await safe_edit(query, f"✅ {ROLE_ICON.get(role,'')} {ROLE_DISPLAY.get(role,role)} sotib olindi!")
         return
 
     if data.startswith("buy:"):
@@ -1890,14 +2424,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prof = get_profile(user_id)
         price = ITEM_PRICES.get(item_id, 0)
         if prof["olmos"] < price:
-            await query.edit_message_text(f"{price} olmos kerak!")
+            await safe_edit(query, f"{price} olmos kerak!")
             return
         prof["olmos"] -= price
         if item_id not in prof["items"]:
             prof["items"][item_id] = {"count": 0, "active": True}
         prof["items"][item_id]["count"] += 1
         save_profile(user_id, prof)
-        await query.edit_message_text(f"✅ {ITEM_NAMES.get(item_id, item_id)} (x{prof['items'][item_id]['count']})")
+        await safe_edit(query, f"✅ {ITEM_NAMES.get(item_id, item_id)} (x{prof['items'][item_id]['count']})")
         return
 
     if data.startswith("nact:"):
@@ -2046,11 +2580,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def load_config():
-    try:
-        with open(CONFIG_FILE, encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return {}
+    return safe_json_load(CONFIG_FILE, {})
 
 
 def save_config(data):
@@ -2064,25 +2594,34 @@ GAME_IMAGE = cfg.get("game_image")
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
 
-    if user.id == ADMIN_ID and user.id in awaiting_image:
-        photo = update.message.photo[-1]
+    if user.id == ADMIN_ID:
         global GAME_IMAGE
-        GAME_IMAGE = photo.file_id
+        photo = update.message.photo[-1]
+        try:
+            file = await context.bot.get_file(photo.file_id)
+            image_bytes = io.BytesIO()
+            await file.download_to_memory(image_bytes)
+            image_bytes.seek(0)
+            img = Image.open(image_bytes)
+            img = img.convert("RGB")
+            img = img.resize((640, 360), Image.LANCZOS)
+            output = io.BytesIO()
+            img.save(output, format="JPEG", quality=92)
+            output.seek(0)
+            sent = await context.bot.send_photo(user.id, output, caption="✅ 640x360 — rasm saqlandi!")
+            GAME_IMAGE = sent.photo[-1].file_id
+        except Exception as e:
+            logging.warning(f"resize fail, using original: {e}")
+            GAME_IMAGE = photo.file_id
         cfg = load_config()
-        cfg["game_image"] = photo.file_id
+        cfg["game_image"] = GAME_IMAGE
         save_config(cfg)
-        awaiting_image.discard(user.id)
-        await update.message.reply_text("✅ Rasm saqlandi!")
-        return
-    elif user.id == ADMIN_ID:
-        awaiting_image.discard(user.id)
         return
 
     if user.id not in pending_checks or pending_checks[user.id].get("step") != "waiting_photo":
         return
     photo = update.message.photo[-1]
-    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Tasdiqlash", callback_data=f"confirm_pay:{user.id}:100")], [InlineKeyboardButton("❌ Rad etish", callback_data=f"reject_pay:{user.id}")]])
-    await context.bot.send_photo(ADMIN_ID, photo.file_id, caption=f"💳 Chek\n{user.first_name} (@{user.username or '-'})\nID: {user.id}", reply_markup=kb)
+    await context.bot.send_photo(ADMIN_ID, photo.file_id, caption=f"💳 Chek\n{user.first_name} (@{user.username or '-'})\nID: {user.id}")
     pending_checks[user.id] = {"step": "waiting_amount", "photo_id": photo.file_id}
     await update.message.reply_text("✅ Chek qabul qilindi! Summani yozing (olmos 50-10000):\nMisol: 100")
 
@@ -2108,7 +2647,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Update {update} caused error {context.error}")
+    logging.error(f"Update {update} caused error {context.error}", exc_info=True)
+    if update and update.effective_chat:
+        try:
+            await context.bot.send_message(update.effective_chat.id, "❌ Xatolik yuz berdi. Administratorga xabar qilindi.")
+        except:
+            pass
+
+
+async def flush_job(context):
+    flush_profiles()
 
 
 def main():
@@ -2117,10 +2665,10 @@ def main():
         ("start", start), ("mafia", mafia), ("join", join), ("leave", leave), ("players", players),
         ("startgame", startgame), ("vote", vote), ("defend", defend), ("status", status), ("g", ghost),
         ("help", help_cmd), ("top", top), ("hafta", hafta), ("stats", stats),
-        ("settings", settings_cmd), ("set", set_cmd), ("setimage", setimage),
+        ("settings", settings_cmd), ("set", set_cmd),
         ("money", money), ("send", send), ("give", give), ("gsend", gsend), ("change", change),
         ("giveaway", giveaway), ("shop", shop), ("profile", profile), ("geroyinfo", geroyinfo),
-        ("addbot", addbot),
+        ("addbot", addbot), ("cancel", cancel_game),
     ]
     for n, h in cmds:
         app.add_handler(CommandHandler(n, h))
@@ -2128,7 +2676,15 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
     app.add_error_handler(error_handler)
-    print("Bot starting...")
+    load_games()
+    if app.job_queue:
+        app.job_queue.run_repeating(flush_job, interval=30, first=10)
+        app.job_queue.run_repeating(lambda _: save_games(), interval=30, first=5)
+        app.job_queue.run_repeating(lambda _: save_confirmed_payments(), interval=60, first=20)
+    load_games()
+    print(f"Games restored: {len(games)}")
+    resume_games(app)
+    print(f"Bot starting... ({len(games)} games active)")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

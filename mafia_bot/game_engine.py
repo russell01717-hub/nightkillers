@@ -1,23 +1,25 @@
-"""Core game engine — phases, night/day resolution, win checks, UI"""
+"""Core game engine — phases, priority-based night/day resolution, win checks, UI"""
 
 import asyncio
 import logging
 import random
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
-from aiogram.types import (
-    InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
-)
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from .models import MafiaGame, Player, games, GamePhase
-from .roles import Role, ROLE_ICON, ROLE_DISPLAY, ROLE_DESC, ROLE_TEAM, IS_NIGHT_ACTIVE
+from .roles import (
+    Role, ROLE_ICON, ROLE_DISPLAY, ROLE_DESC, ROLE_TEAM, IS_NIGHT_ACTIVE,
+    ROLE_PRIORITY_MAP, ActionPriority,
+)
 from .config import NIGHT_TIME, DAY_TIME, MORNING_WAIT
 from .db import (
     get_profile, save_profile, update_weekly_score,
-    delete_active_game, get_chat_setting
+    delete_active_game, get_chat_setting,
+    update_elo, expected_score, unlock_achievement, log_anticheat,
 )
 from .economy import game_reward
 
@@ -53,7 +55,7 @@ def make_players_keyboard(
     for p in players:
         if p.user_id not in exclude_ids:
             prefix = f"{callback_prefix}:{chat_id}" if chat_id is not None else callback_prefix
-            role_icon = ROLE_ICON.get(p.role, "👤") if p.role and show_roles else "👤"
+            role_icon = ROLE_ICON.get(p.role, "") if p.role and show_roles else ""
             builder.button(
                 text=f"{p.status_icon()} {role_icon} {p.display}",
                 callback_data=f"{prefix}:{p.user_id}"
@@ -137,12 +139,12 @@ def make_game_banner(phase: GamePhase, day: int = 0) -> str:
 
 
 def make_player_card(player: Player, show_role: bool = False) -> str:
-    team_icon = "🔪" if player.team == "mafia" else "👤"
-    role_line = f"├ Role: {player.role_display}\n" if show_role and player.role else ""
+    team_icon = "🔪" if player.team == "mafia" else ""
+    role_line = f"├ {player.role_display}\n" if show_role and player.role else ""
     return (
         f"{'🟢' if player.alive else '💀'} <b>{player.display}</b>\n"
         f"{role_line}"
-        f"└ Status: {'Alive ✅' if player.alive else 'Dead ❌'}"
+        f"└ {'Tirik' if player.alive else 'O\'lgan'}"
     )
 
 
@@ -197,6 +199,54 @@ async def update_game_message(game: MafiaGame, bot: Bot):
     ])
     await safe_edit_message(bot, game.chat_id, game.game_msg_id, text, reply_markup=kb)
 
+
+# ── AFK Detection ──
+
+async def check_afk(game: MafiaGame, bot: Bot):
+    for player in game.alive_players:
+        if player.is_bot:
+            continue
+        if player.last_action_round < game.day - 1:
+            player.afk_rounds += 1
+        if player.afk_rounds >= 2:
+            player.alive = False
+            await safe_send_message(
+                bot, game.chat_id,
+                f"💤 <b>{player.display}</b> uzoq vaqt harakatsizlik tufayli o'yindan chiqarildi!"
+            )
+            log_anticheat(game.chat_id, player.user_id, "AFK > 2 rounds")
+
+
+# ── Achievements ──
+
+async def check_achievements(game: MafiaGame, winner: str):
+    for player in game.players.values():
+        if player.is_bot:
+            continue
+        uid = player.user_id
+        profile = get_profile(uid)
+        games_count = profile.get("games", 0)
+        if games_count == 1 and player.team == winner:
+            unlock_achievement(uid, "first_win")
+        if games_count == 10:
+            unlock_achievement(uid, "arifmetist")
+        if games_count == 50:
+            unlock_achievement(uid, "veteran")
+        if games_count == 100:
+            unlock_achievement(uid, "legend")
+        if winner == "mafia" and player.team == "mafia":
+            unlock_achievement(uid, "mafia_win")
+        if winner == "town" and player.team == "town":
+            unlock_achievement(uid, "town_win")
+        if player.role == Role.JOKER and winner == "neutral":
+            unlock_achievement(uid, "joker_win")
+        if player.role == Role.MANIYAK and winner == "neutral":
+            unlock_achievement(uid, "maniyak_win")
+        if player.role == Role.SURVIVOR and player.alive and winner != "neutral":
+            unlock_achievement(uid, "survivor_win")
+
+
+# ── Night Phase ──
 
 async def start_night_phase(game: MafiaGame, bot: Bot):
     game.cancel_timers()
@@ -267,27 +317,49 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
                 )
                 game.action_ready[player.user_id] = False
             else:
-                await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nHech kim o'lmagan.")
+                await safe_send_message(bot, player.user_id, f"🌙 Hech kim o'lmagan.")
                 game.action_ready[player.user_id] = True
         elif role == Role.MANIYAK:
             targets = [p for p in game.alive_players if p.user_id != player.user_id]
             kb = make_players_keyboard(targets, "nv_maniyak", chat_id=cid)
             await safe_send_message(
                 bot, player.user_id,
-                f"🪓 <b>{game.day}-tun</b>\n\nKimni o'ldiramiz? (Mustaqil harakat)",
+                f"🪓 <b>{game.day}-tun</b>\n\nKimni o'ldiramiz?",
+                reply_markup=kb
+            )
+            game.action_ready[player.user_id] = False
+        elif role == Role.VIGILANTE:
+            if game.vigilante_bullets <= 0:
+                await safe_send_message(bot, player.user_id, f"🔫 O'qlar tugadi!")
+                game.action_ready[player.user_id] = True
+                continue
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            kb = make_players_keyboard(targets, "nv_vigilante", chat_id=cid)
+            await safe_send_message(
+                bot, player.user_id,
+                f"🔫 <b>{game.day}-tun</b>\n\nKimni otamiz? (Qolgan o'q: {game.vigilante_bullets})",
+                reply_markup=kb
+            )
+            game.action_ready[player.user_id] = False
+        elif role == Role.TRANSPORTER:
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            kb = make_players_keyboard(targets, "nv_transport1", chat_id=cid)
+            await safe_send_message(
+                bot, player.user_id,
+                f"🔄 <b>{game.day}-tun</b>\n\n1-o'yinchini tanlang:",
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
         elif role == Role.SHERIF:
             await safe_send_message(
                 bot, player.user_id,
-                f"🛡 <b>{game.day}-tun</b>\n\nSiz himoyadasiz. Mafiya sizni otmoqchi bo'lsa, ulardan biri o'ladi."
+                f"🛡 <b>{game.day}-tun</b>\n\nSiz himoyadasiz."
             )
             game.action_ready[player.user_id] = True
         elif role == Role.ADVOKAT:
             await safe_send_message(
                 bot, player.user_id,
-                f"⚖️ <b>{game.day}-tun</b>\n\nErtangi kunda bir o'yinchini himoya qilishingiz mumkin."
+                f"⚖️ <b>{game.day}-tun</b>\n\nErtangi kunda himoya qilishingiz mumkin."
             )
             game.action_ready[player.user_id] = True
         elif role == Role.VETERAN:
@@ -295,7 +367,7 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
             kb = make_players_keyboard(targets, "nv_veteran", chat_id=cid)
             await safe_send_message(
                 bot, player.user_id,
-                f"🎖 <b>{game.day}-tun</b>\n\nHujum rejimiga o'tasizmi? Kimnidir otasizmi?",
+                f"🎖 <b>{game.day}-tun</b>\n\nHujum rejimiga o'tasizmi?",
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
@@ -317,210 +389,45 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
-        elif role == Role.VIGILANTE:
-            if game.vigilante_bullets <= 0:
-                await safe_send_message(bot, player.user_id, f"🔫 O'qlar tugadi! Siz otolmaysiz.")
-                game.action_ready[player.user_id] = True
-                continue
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_vigilante", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🔫 <b>{game.day}-tun</b>\n\nKimni otamiz? (Agar begunoh bo'lsa, o'zingiz o'lasiz)\nQolgan o'q: {game.vigilante_bullets}",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.TRANSPORTER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_transport1", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🔄 <b>{game.day}-tun</b>\n\n1-o'yinchini tanlang (o'rin almashtirish):",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
         elif role == Role.SPY:
             await safe_send_message(
                 bot, player.user_id,
-                f"🕶 <b>{game.day}-tun</b>\n\nSiz mafiya a'zolarining muhokamasini eshitasiz..."
+                f"🕶 <b>{game.day}-tun</b>\n\nSiz mafiyani eshitasiz..."
             )
             game.action_ready[player.user_id] = True
-        elif role == Role.CONSIGLIERE:
+        elif role in (Role.KUZATUVCHI, Role.IZQUVAR, Role.TERGOVCHI, Role.DETEKTIV,
+                      Role.PSIXOLOG, Role.MUHANDIS, Role.ORACLE, Role.PRIEST,
+                      Role.CONSIGLIERE):
+            prefix_map = {
+                Role.KUZATUVCHI: "nv_watch", Role.IZQUVAR: "nv_izquvar",
+                Role.TERGOVCHI: "nv_investigate", Role.DETEKTIV: "nv_detective",
+                Role.PSIXOLOG: "nv_psychologist", Role.MUHANDIS: "nv_engineer",
+                Role.ORACLE: "nv_oracle", Role.PRIEST: "nv_priest",
+                Role.CONSIGLIERE: "nv_consigliere",
+            }
             targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_consigliere", chat_id=cid)
+            kb = make_players_keyboard(targets, prefix_map[role], chat_id=cid)
             await safe_send_message(
                 bot, player.user_id,
-                f"📜 <b>{game.day}-tun</b>\n\nKimning rolini bilmoqchisiz?",
+                f"🌙 <b>{game.day}-tun</b>\n\nKimni tanlaysiz?",
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
-        elif role == Role.IZQUVAR:
+        elif role in (Role.ARSONIST, Role.WITCH, Role.ASSASSIN, Role.BOMBER,
+                      Role.POISONER, Role.PROFESSIONAL, Role.ROLEBLOCKER,
+                      Role.SILENCER, Role.BLACKMAILER, Role.FRAMER):
+            prefix_map2 = {
+                Role.ARSONIST: "nv_arsonist", Role.WITCH: "nv_witch",
+                Role.ASSASSIN: "nv_assassin", Role.BOMBER: "nv_bomber",
+                Role.POISONER: "nv_poisoner", Role.PROFESSIONAL: "nv_professional",
+                Role.ROLEBLOCKER: "nv_roleblock", Role.SILENCER: "nv_silence",
+                Role.BLACKMAILER: "nv_blackmail", Role.FRAMER: "nv_framer",
+            }
             targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_izquvar", chat_id=cid)
+            kb = make_players_keyboard(targets, prefix_map2[role], chat_id=cid)
             await safe_send_message(
                 bot, player.user_id,
-                f"🔎 <b>{game.day}-tun</b>\n\nKimni kuzatamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.KUZATUVCHI:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_watch", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"👁 <b>{game.day}-tun</b>\n\nKimni kuzatamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.TERGOVCHI:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_investigate", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"📋 <b>{game.day}-tun</b>\n\nKimni tergov qilamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.DETEKTIV:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_detective", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🕵️ <b>{game.day}-tun</b>\n\nKimni tekshiramiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.PSIXOLOG:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_psychologist", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🧠 <b>{game.day}-tun</b>\n\nKimning psixologik holatini tekshiramiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.ORACLE:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_oracle", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🔯 <b>{game.day}-tun</b>\n\nKimning o'limi haqida ma'lumot olamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.PRIEST:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_priest", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"✝️ <b>{game.day}-tun</b>\n\nKimni himoya qilamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.MUHANDIS:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_engineer", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"⚙️ <b>{game.day}-tun</b>\n\nKimning uyiga kuzatuv qurilmasini o'rnatamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.MEDIUM:
-            dead_list = "\n".join([f"💀 {p.display}" for p in game.dead_players]) if game.dead_players else "Hech kim o'lmagan"
-            await safe_send_message(
-                bot, player.user_id,
-                f"🔮 <b>{game.day}-tun</b>\n\nO'lgan ruhlar bilan bog'lanasiz...\n\n{dead_list}"
-            )
-            game.action_ready[player.user_id] = True
-        elif role == Role.ARSONIST:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_arsonist", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🔥 <b>{game.day}-tun</b>\n\nKimni benzin bilan sepamiz?\n"
-                f"Yoki yoqish uchun /ignite yozing.",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.WITCH:
-            target_list = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(target_list, "nv_witch", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🧙 <b>{game.day}-tun</b>\n\nKimni boshqaramiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.ASSASSIN and game.day % 2 == 1:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_assassin", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🗡 <b>{game.day}-tun</b>\n\nKimni o'ldiramiz? (Har 2 tunda 1 marta)",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.BOMBER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_bomber", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"💣 <b>{game.day}-tun</b>\n\nKimning uyiga bomba o'rnatamiz? (Keyingi tun portlaydi)",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.POISONER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_poisoner", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"☠️ <b>{game.day}-tun</b>\n\nKimni zaharlaymiz? (Ertasi kuni o'ladi)",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.PROFESSIONAL:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_professional", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🎯 <b>{game.day}-tun</b>\n\nKimni o'ldiramiz? (Noto'g'ri o'ldirsangiz, o'zingiz o'lasiz)",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.ROLEBLOCKER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_roleblock", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🔒 <b>{game.day}-tun</b>\n\nKimni bloklaymiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.SILENCER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_silence", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🤐 <b>{game.day}-tun</b>\n\nKimni ovozsiz qoldiramiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.BLACKMAILER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_blackmail", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"📨 <b>{game.day}-tun</b>\n\nKimni shantaj qilamiz?",
-                reply_markup=kb
-            )
-            game.action_ready[player.user_id] = False
-        elif role == Role.FRAMER:
-            targets = [p for p in game.alive_players if p.user_id != player.user_id]
-            kb = make_players_keyboard(targets, "nv_framer", chat_id=cid)
-            await safe_send_message(
-                bot, player.user_id,
-                f"🎭 <b>{game.day}-tun</b>\n\nKimni framer qilamiz?",
+                f"🌙 <b>{game.day}-tun</b>\n\nKimni tanlaysiz?",
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
@@ -543,36 +450,30 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
                 kb = make_players_keyboard(targets, "nv_forger", chat_id=cid)
                 await safe_send_message(
                     bot, player.user_id,
-                    f"✒️ <b>{game.day}-tun</b>\n\nKimning rol ma'lumotini o'zgartiramiz?",
+                    f"✒️ <b>{game.day}-tun</b>\n\nKimning ma'lumotini o'zgartiramiz?",
                     reply_markup=kb
                 )
                 game.action_ready[player.user_id] = False
             else:
                 await safe_send_message(bot, player.user_id, f"🌙 Hech kim o'lmagan.")
                 game.action_ready[player.user_id] = True
-        elif role == Role.JOKER:
-            await safe_send_message(
-                bot, player.user_id,
-                f"🃏 <b>{game.day}-tun</b>\n\nSizning maqsadingiz — ovoz berish orqali chiqarilish!"
-            )
+        elif role == Role.MEDIUM:
+            dead_list = "\n".join([f"💀 {p.display}" for p in game.dead_players]) if game.dead_players else "Hech kim o'lmagan"
+            await safe_send_message(bot, player.user_id, f"🔮 <b>{game.day}-tun</b>\n\n{dead_list}")
             game.action_ready[player.user_id] = True
-        elif role == Role.SURVIVOR:
-            await safe_send_message(
-                bot, player.user_id,
-                f"⛺ <b>{game.day}-tun</b>\n\nSizning maqsadingiz — tirik qolish!"
-            )
+        elif role in (Role.JOKER, Role.SURVIVOR, Role.EXECUTIONER):
+            msg = {
+                Role.JOKER: "🃏 Maqsadingiz — ovoz berish orqali chiqarilish!",
+                Role.SURVIVOR: "⛺ Maqsadingiz — tirik qolish!",
+                Role.EXECUTIONER: "🪓 Maqsadingiz — bir o'yinchini chiqarilishiga erishish!",
+            }[role]
+            await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\n{msg}")
             game.action_ready[player.user_id] = True
-        elif role == Role.EXECUTIONER:
-            await safe_send_message(
-                bot, player.user_id,
-                f"🪓 <b>{game.day}-tun</b>\n\nSizning maqsadingiz — bir o'yinchini chiqarilishiga erishish!"
-            )
-            game.action_ready[player.user_id] = True
-        elif role in (Role.MER, Role.AMNESIAC):
+        elif role in (Role.TINCH, Role.MER, Role.AMNESIAC):
             await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nSiz uxlayapsiz...")
             game.action_ready[player.user_id] = True
         else:
-            await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nSiz uxlayapsiz... Ertangi kunni kuting.")
+            await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nKutib turing...")
             game.action_ready[player.user_id] = True
 
         await asyncio.sleep(0.05)
@@ -587,15 +488,16 @@ async def night_timer(game: MafiaGame, bot: Bot):
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        log.error(f"Night timer error for {game.chat_id}: {e}")
+        log.error(f"Night timer error: {e}")
 
+
+# ── Priority-Based Night Resolution ──
 
 async def end_night_phase(game: MafiaGame, bot: Bot):
     if game.phase != GamePhase.NIGHT:
         return
     game.log("night_ended", f"Day {game.day}")
 
-    # Transport resolution
     transport_map = {}
     if game.transporter_target1 and game.transporter_target2:
         transport_map[game.transporter_target1] = game.transporter_target2
@@ -606,12 +508,119 @@ async def end_night_phase(game: MafiaGame, bot: Bot):
             return transport_map[target]
         return target
 
-    # Roleblock resolution
     roleblocked = set()
     if game.roleblocker_target:
         roleblocked.add(game.roleblocker_target)
 
-    # Mafia kill vote resolution
+    results = {
+        "killed": set(),
+        "healed": set(),
+        "protected": set(),
+        "revived": set(),
+        "sherif_vengeance": None,
+        "investigator_results": [],
+    }
+
+    # ── STEP 1: Roleblock & Silence actions (PRIORITY 2-3) ──
+    for p in game.players.values():
+        if p.user_id in roleblocked:
+            p.roleblocked = True
+        if p.user_id == game.silencer_target:
+            p.silenced = True
+        if p.user_id == game.blackmailer_target:
+            p.blackmailed = True
+        if p.user_id == game.framer_target:
+            p.framed = True
+
+    # ── STEP 2: Investigate actions (PRIORITY 4) ──
+    if game.komissar_target is not None and game.komissar_target not in roleblocked:
+        checked = game.get_player(resolve_target(game.komissar_target))
+        if checked:
+            is_mafia = checked.team == "mafia"
+            if checked.role in (Role.DON, Role.GODFATHER):
+                is_mafia = False
+            if checked.framed:
+                is_mafia = True
+            result = "🔴 MAFIA" if is_mafia else "🟢 Tinch aholi"
+            for p in game.players.values():
+                if p.role == Role.KOMISSAR and p.alive:
+                    await safe_send_message(bot, p.user_id, f"🔍 <b>Natija:</b>\n{checked.display}: {result}")
+                    unlock_achievement(p.user_id, "komissar_check")
+
+    if game.detective_target is not None and game.detective_target not in roleblocked:
+        det = game.get_player(resolve_target(game.detective_target))
+        if det:
+            is_suspicious = det.team == "mafia"
+            if det.role in (Role.DON, Role.GODFATHER):
+                is_suspicious = False
+            if det.framed:
+                is_suspicious = True
+            result = "⚖️ Aybdor" if is_suspicious else "✅ Begunoh"
+            for p in game.players.values():
+                if p.role == Role.DETEKTIV and p.alive:
+                    await safe_send_message(bot, p.user_id, f"🕵️ <b>Natija:</b>\n{det.display}: {result}")
+
+    if game.tergovchi_target is not None and game.tergovchi_target not in roleblocked:
+        inv = game.get_player(resolve_target(game.tergovchi_target))
+        if inv:
+            if inv.framed:
+                role_info = "🔴 Mafia a'zosi"
+            elif inv.team == "mafia":
+                role_info = "🔴 Mafia a'zosi"
+            elif inv.team == "neutral":
+                role_info = "🟣 Mustaqil"
+            else:
+                role_info = "🟢 Shahar aholisi"
+            for p in game.players.values():
+                if p.role == Role.TERGOVCHI and p.alive:
+                    await safe_send_message(bot, p.user_id, f"📋 <b>Natija:</b>\n{inv.display}: {role_info}")
+
+    if game.consigliere_target is not None and game.consigliere_target not in roleblocked:
+        consig = game.get_player(resolve_target(game.consigliere_target))
+        if consig:
+            for p in game.players.values():
+                if p.role == Role.CONSIGLIERE and p.alive:
+                    await safe_send_message(bot, p.user_id, f"📜 <b>Natija:</b>\n{consig.display} — {consig.role_display}")
+
+    if game.izquvar_target is not None and game.izquvar_target not in roleblocked:
+        izq = game.get_player(resolve_target(game.izquvar_target))
+        if izq:
+            visited = [p.display for p in game.players.values() if p.night_target == izq.user_id and p.user_id != izq.user_id]
+            text = f"🔎 <b>Natija:</b>\n{izq.display} ga: " + (", ".join(visited) if visited else "Hech kim")
+            for p in game.players.values():
+                if p.role == Role.IZQUVAR and p.alive:
+                    await safe_send_message(bot, p.user_id, text)
+
+    if game.kuzatuvchi_target is not None and game.kuzatuvchi_target not in roleblocked:
+        wat = game.get_player(resolve_target(game.kuzatuvchi_target))
+        if wat:
+            visited_by = [p.display for p in game.players.values() if p.night_target == wat.user_id and p.user_id != wat.user_id]
+            text = f"👁 <b>Natija:</b>\n{wat.display} ga: " + (", ".join(visited_by) if visited_by else "Hech kim")
+            for p in game.players.values():
+                if p.role == Role.KUZATUVCHI and p.alive:
+                    await safe_send_message(bot, p.user_id, text)
+
+    # ── STEP 3: Protect actions (PRIORITY 5) ──
+    if game.doktor_target is not None:
+        dt = resolve_target(game.doktor_target)
+        if dt not in roleblocked:
+            results["healed"].add(dt)
+            results["protected"].add(dt)
+    if game.hamshira_target is not None:
+        ht = resolve_target(game.hamshira_target)
+        if ht not in roleblocked:
+            results["protected"].add(ht)
+    if game.priest_target is not None:
+        pt = resolve_target(game.priest_target)
+        if pt not in roleblocked:
+            results["protected"].add(pt)
+    if game.qoriqchi_target is not None:
+        qt = resolve_target(game.qoriqchi_target)
+        if qt not in roleblocked:
+            results["protected"].add(qt)
+
+    # ── STEP 4: Kill actions (PRIORITY 6) ──
+    # Mafia kill
     mafia_votes = game.mafia_votes_received
     kill_target = None
     if mafia_votes:
@@ -623,217 +632,152 @@ async def end_night_phase(game: MafiaGame, bot: Bot):
     elif game.consigliere_target is not None:
         kill_target = game.consigliere_target
 
-    # Resolve mafia kill
-    kill_target = resolve_target(kill_target)
-    killed_player = None
-    if kill_target is not None and kill_target in game.players:
-        target = game.get_player(kill_target)
-        if target and target.alive and kill_target not in roleblocked:
-            if kill_target == game.doktor_target or kill_target == game.hamshira_target or kill_target == game.priest_target:
-                heal_role = "Doktor" if kill_target == game.doktor_target else "Hamshira" if kill_target == game.hamshira_target else "Priest"
-                game.healed_player = kill_target
-                target.protected = True
-            elif game.veteran_active and kill_target in [p.user_id for p in game.alive_players if p.role == Role.VETERAN]:
-                attacker = None
-                for p in game.players.values():
-                    if p.role in (Role.MAFIA, Role.DON, Role.GODFATHER):
-                        attacker = p
-                        break
-                if attacker:
-                    attacker.alive = False
+    if kill_target is not None and kill_target not in roleblocked:
+        kt = resolve_target(kill_target)
+        target = game.get_player(kt)
+        if target and target.alive:
+            if kt in results["protected"]:
+                if kt in results["healed"]:
+                    results["killed"].discard(kt)
+                    game.healed_player = kt
+                else:
+                    results["killed"].discard(kt)
             else:
                 target.alive = False
-                killed_player = target
+                results["killed"].add(kt)
 
-    # Resolve Vigilante kill
-    vigilante_killed = None
-    if game.vigilante_target is not None:
-        vig_target = resolve_target(game.vigilante_target)
-        target = game.get_player(vig_target)
-        if target and target.alive and vig_target not in roleblocked:
+    # Maniyak kill
+    if game.maniyak_target is not None and game.maniyak_target not in roleblocked:
+        mt = resolve_target(game.maniyak_target)
+        target = game.get_player(mt)
+        if target and target.alive and mt not in results["protected"]:
             target.alive = False
-            vigilante_killed = target
+            results["killed"].add(mt)
+
+    # Vigilante kill
+    if game.vigilante_target is not None and game.vigilante_target not in roleblocked:
+        vt = resolve_target(game.vigilante_target)
+        target = game.get_player(vt)
+        if target and target.alive and vt not in results["protected"]:
+            target.alive = False
+            results["killed"].add(vt)
             if target.team != "mafia":
                 for p in game.players.values():
                     if p.role == Role.VIGILANTE:
                         p.alive = False
+                        unlock_achievement(p.user_id, "vigilante_kill")
 
-    # Resolve Maniyak kill
-    maniyak_killed = None
-    if game.maniyak_target is not None:
-        m_target = resolve_target(game.maniyak_target)
-        target = game.get_player(m_target)
-        if target and target.alive and m_target not in roleblocked:
+    # Professional kill
+    if game.professional_target is not None and game.professional_target not in roleblocked:
+        pt = resolve_target(game.professional_target)
+        target = game.get_player(pt)
+        if target and target.alive and pt not in results["protected"]:
             target.alive = False
-            maniyak_killed = target
-
-    # Resolve Professional kill
-    professional_killed = None
-    if game.professional_target is not None:
-        p_target = resolve_target(game.professional_target)
-        target = game.get_player(p_target)
-        if target and target.alive and p_target not in roleblocked:
-            target.alive = False
-            professional_killed = target
+            results["killed"].add(pt)
             if target.team != "mafia":
-                for pl in game.players.values():
-                    if pl.role == Role.PROFESSIONAL:
-                        pl.alive = False
+                for p in game.players.values():
+                    if p.role == Role.PROFESSIONAL:
+                        p.alive = False
 
-    # Resolve Assassin kill
-    if game.assassin_target is not None and game.day % 2 == 1:
-        a_target = resolve_target(game.assassin_target)
-        target = game.get_player(a_target)
-        if target and target.alive and a_target not in roleblocked:
+    # Assassin kill (odd days only)
+    if game.assassin_target is not None and game.day % 2 == 1 and game.assassin_target not in roleblocked:
+        at = resolve_target(game.assassin_target)
+        target = game.get_player(at)
+        if target and target.alive and at not in results["protected"]:
             target.alive = False
+            results["killed"].add(at)
 
     # Bomber detonation
-    bomber_exploded = None
-    if game.bomber_target is not None:
-        b_target = resolve_target(game.bomber_target)
-        target = game.get_player(b_target)
-        if target and target.alive and b_target not in roleblocked:
+    if game.bomber_target is not None and game.bomber_target not in roleblocked:
+        bt = resolve_target(game.bomber_target)
+        target = game.get_player(bt)
+        if target and target.alive and bt not in results["protected"]:
             target.alive = False
-            bomber_exploded = target
+            results["killed"].add(bt)
 
     # Poisoner kill
-    if game.poisoner_target is not None:
-        po_target = resolve_target(game.poisoner_target)
-        target = game.get_player(po_target)
-        if target and target.alive and po_target not in roleblocked:
+    if game.poisoner_target is not None and game.poisoner_target not in roleblocked:
+        pot = resolve_target(game.poisoner_target)
+        target = game.get_player(pot)
+        if target and target.alive and pot not in results["protected"]:
             target.alive = False
+            results["killed"].add(pot)
 
     # Arsonist ignite
-    arsonist_killed = []
     if game.arsonist_ignite:
         for uid in game.arsonist_targets:
             target = game.get_player(uid)
-            if target and target.alive:
+            if target and target.alive and uid not in results["protected"]:
                 target.alive = False
-                arsonist_killed.append(target)
+                results["killed"].add(uid)
         game.arsonist_targets = []
 
-    # Investigator results
-    if game.komissar_target is not None:
-        checked = game.get_player(resolve_target(game.komissar_target))
-        if checked:
-            is_mafia = checked.team == "mafia"
-            if checked.role in (Role.DON, Role.GODFATHER):
-                is_mafia = False
-            result = "🔴 MAFIA" if is_mafia else "🟢 Tinch aholi"
-            for p in game.players.values():
-                if p.role == Role.KOMISSAR and p.alive:
-                    await safe_send_message(
-                        bot, p.user_id,
-                        f"🔍 <b>Tekshiruv natijasi:</b>\n{checked.display}: {result}"
-                    )
-
-    if game.detective_target is not None:
-        det = game.get_player(resolve_target(game.detective_target))
-        if det:
-            is_suspicious = det.team == "mafia"
-            if det.role in (Role.DON, Role.GODFATHER):
-                is_suspicious = False
-            result = "⚖️ Aybdor" if is_suspicious else "✅ Begunoh"
-            for p in game.players.values():
-                if p.role == Role.DETEKTIV and p.alive:
-                    await safe_send_message(
-                        bot, p.user_id,
-                        f"🕵️ <b>Detektiv natijasi:</b>\n{det.display}: {result}"
-                    )
-
-    if game.tergovchi_target is not None:
-        inv = game.get_player(resolve_target(game.tergovchi_target))
-        if inv:
-            ter_results = ["🔴 Mafia a'zosi", "🟢 Shahar aholisi", "🟣 Mustaqil"]
-            if inv.team == "mafia":
-                role_info = ter_results[0]
-            elif inv.team == "neutral":
-                role_info = ter_results[2]
-            else:
-                role_info = ter_results[1]
-            for p in game.players.values():
-                if p.role == Role.TERGOVCHI and p.alive:
-                    await safe_send_message(
-                        bot, p.user_id,
-                        f"📋 <b>Tergov natijasi:</b>\n{inv.display}: {role_info}"
-                    )
-
-    if game.izquvar_target is not None:
-        izq_target = resolve_target(game.izquvar_target)
-        izq = game.get_player(izq_target)
-        if izq and izq.alive:
-            visited = []
-            for p in game.players.values():
-                if p.night_target == izq_target and p.user_id != izq_target:
-                    visited.append(p.display)
-            text = f"🔎 <b>Kuzatuv natijasi:</b>\n{izq.display} ga tashrif buyurganlar: "
-            text += ", ".join(visited) if visited else "Hech kim"
-            for p in game.players.values():
-                if p.role == Role.IZQUVAR and p.alive:
-                    await safe_send_message(bot, p.user_id, text)
-
-    # Consigliere result
-    if game.consigliere_target is not None:
-        consig = game.get_player(resolve_target(game.consigliere_target))
-        if consig:
-            result = f"📜 <b>Consigliere natijasi:</b>\n{consig.display} — {consig.role_display}"
-            for p in game.players.values():
-                if p.role == Role.CONSIGLIERE and p.alive:
-                    await safe_send_message(bot, p.user_id, result)
-
-    # Spy info
-    for p in game.players.values():
-        if p.role == Role.SPY and p.alive:
-            mafia_chat = []
-            for mp in game.mafia_players:
-                if mp.user_id != p.user_id:
-                    target_info = ""
-                    if game.mafia_votes.get(mp.user_id):
-                        target_info = f" -> {game.get_player(game.mafia_votes[mp.user_id]).display}"
-                    mafia_chat.append(f"🔪 {mp.display}{target_info}")
-            spy_text = f"🕶 <b>Mafia muhokamasi:</b>\n" + "\n".join(mafia_chat) if mafia_chat else "Mafia hech narsa muhokama qilmadi."
-            await safe_send_message(bot, p.user_id, spy_text)
-
-    # Witch control
-    for witch_id, target_id in game.witch_control.items():
-        pass
-
-    # Sherif vengeance
-    sherif_vengeance = None
-    if killed_player and killed_player.role == Role.SHERIF:
+    # ── STEP 5: Vengeful (PRIORITY 7) ──
+    sherif_killed = any(game.get_player(k) and game.get_player(k).role == Role.SHERIF for k in results["killed"])
+    if sherif_killed:
         mafia_alive = game.mafia_players
         if mafia_alive:
             vengeance_target = random.choice(mafia_alive)
             vengeance_target.alive = False
-            sherif_vengeance = vengeance_target
+            results["sherif_vengeance"] = vengeance_target
+            for p in game.players.values():
+                if p.role == Role.SHERIF:
+                    unlock_achievement(p.user_id, "sherif_revenge")
 
-    # ── Morning message ──
+    # Veteran retaliation
+    if game.veteran_active:
+        for k in list(results["killed"]):
+            target = game.get_player(k)
+            if target and target.role == Role.VETERAN:
+                killer = None
+                for p in game.alive_players:
+                    if p.team == "mafia":
+                        killer = p
+                        break
+                if killer:
+                    killer.alive = False
+                    results["killed"].add(killer.user_id)
+
+    # ── STEP 6: Spy info (PRIORITY 4, but needs kill results) ──
+    for p in game.players.values():
+        if p.role == Role.SPY and p.alive:
+            mafia_chat = []
+            for mp in game.mafia_players:
+                target_info = ""
+                if game.mafia_votes.get(mp.user_id):
+                    tgt = game.get_player(game.mafia_votes[mp.user_id])
+                    if tgt:
+                        target_info = f" -> {tgt.display}"
+                mafia_chat.append(f"🔪 {mp.display}{target_info}")
+            spy_text = "🕶 <b>Mafia:</b>\n" + "\n".join(mafia_chat) if mafia_chat else "Mafia hech narsa qilmadi."
+            await safe_send_message(bot, p.user_id, spy_text)
+
+    # Witch control (no-op for now)
+    for witch_id, target_id in game.witch_control.items():
+        pass
+
+    # ── Morning broadcast ──
     game.phase = GamePhase.MORNING
     death_messages = []
-    if killed_player:
+
+    killed_players = [game.get_player(k) for k in results["killed"] if game.get_player(k)]
+    for kp in killed_players:
+        if kp:
+            death_messages.append(
+                f"💀 <b>{kp.display}</b> o'ldirildi! "
+                f"({ROLE_ICON.get(kp.role, '❓')} {kp.role.value if kp.role else '?'})"
+            )
+
+    if results["sherif_vengeance"]:
+        sv = results["sherif_vengeance"]
         death_messages.append(
-            f"💀 <b>{killed_player.display}</b> o'ldirildi! "
-            f"({ROLE_ICON.get(killed_player.role, '❓')} {killed_player.role.value if killed_player.role else '?'})"
+            f"🛡 Sherif qasosi! <b>{sv.display}</b> o'ldirildi!"
         )
-    if sherif_vengeance:
-        death_messages.append(
-            f"🛡 Sherif qasosi! <b>{sherif_vengeance.display}</b> otib o'ldirildi! "
-            f"({ROLE_ICON.get(sherif_vengeance.role, '❓')} {sherif_vengeance.role.value if sherif_vengeance.role else '?'})"
-        )
-    if maniyak_killed and maniyak_killed != killed_player:
-        death_messages.append(
-            f"🪓 <b>{maniyak_killed.display}</b> Maniyak tomonidan o'ldirildi! "
-            f"({ROLE_ICON.get(maniyak_killed.role, '❓')} {maniyak_killed.role.value if maniyak_killed.role else '?'})"
-        )
-    if vigilante_killed:
-        death_messages.append(f"🔫 <b>{vigilante_killed.display}</b> Vigilante tomonidan otildi!")
-    for ak in arsonist_killed:
-        death_messages.append(f"🔥 <b>{ak.display}</b> yonib o'ldi!")
-    if game.healed_player and not killed_player:
+
+    if game.healed_player and not any(game.get_player(k).user_id == game.healed_player for k in results["killed"] if game.get_player(k)):
         healed = game.get_player(game.healed_player)
         if healed:
-            death_messages.append(f"💊 Doktor {healed.display} ni davoladi! Hech kim o'lmadi!")
+            death_messages.append(f"💊 Doktor {healed.display} ni davoladi!")
 
     if death_messages:
         text = f"{make_game_banner(GamePhase.MORNING, game.day)}\n\n" + "\n".join(death_messages) + "\n\n"
@@ -841,14 +785,14 @@ async def end_night_phase(game: MafiaGame, bot: Bot):
         text = f"{make_game_banner(GamePhase.MORNING, game.day)}\n\nBu tun hech kim o'lmadi...\n\n"
 
     alive_list = "\n".join([make_player_card(p) for p in game.alive_players])
-    text += f"<b>Tirik o'yinchilar ({len(game.alive_players)}):</b>\n{alive_list}\n\n"
+    text += f"<b>Tirik ({len(game.alive_players)}):</b>\n{alive_list}\n\n"
 
     winner = check_winner(game)
     if winner:
         await end_game(game, bot, winner)
         return
 
-    text += f"⏳ <b>Ovoz berish {game.vote_time} soniyadan keyin boshlanadi...</b>"
+    text += f"⏳ Ovoz berish {game.vote_time}s dan keyin..."
     if game.game_msg_id:
         await safe_edit_message(bot, game.chat_id, game.game_msg_id, text)
 
@@ -862,8 +806,10 @@ async def morning_timer(game: MafiaGame, bot: Bot):
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        log.error(f"Morning timer error for {game.chat_id}: {e}")
+        log.error(f"Morning timer error: {e}")
 
+
+# ── Day Phase ──
 
 async def start_day_phase(game: MafiaGame, bot: Bot):
     if game.phase != GamePhase.MORNING:
@@ -872,10 +818,12 @@ async def start_day_phase(game: MafiaGame, bot: Bot):
     game.reset_day()
     game.log("voting_started", f"Day {game.day}")
 
+    await check_afk(game, bot)
+
     text = (
         f"{make_game_banner(GamePhase.VOTING, game.day)}\n\n"
-        f"⏱ Vaqt: {game.vote_time} soniya\n\n"
-        f"<b>Tirik o'yinchilar ({len(game.alive_players)}):</b>\n" +
+        f"⏱ {game.vote_time}s\n\n"
+        f"<b>Tirik ({len(game.alive_players)}):</b>\n" +
         "\n".join([make_player_card(p) for p in game.alive_players]) +
         "\n\n<b>Kimni chetlatamiz?</b>"
     )
@@ -884,6 +832,10 @@ async def start_day_phase(game: MafiaGame, bot: Bot):
     kb.inline_keyboard.append([
         InlineKeyboardButton(text="⏭ O'tkazib yuborish", callback_data=f"d_skip:{game.chat_id}")
     ])
+    if game.vote_round > 1:
+        kb.inline_keyboard.append([
+            InlineKeyboardButton(text=f"🔄 Qayta ovoz ({game.vote_round}-tur)", callback_data=f"d_skip:{game.chat_id}")
+        ])
 
     if game.game_msg_id:
         await safe_edit_message(bot, game.chat_id, game.game_msg_id, text, reply_markup=kb)
@@ -902,46 +854,83 @@ async def day_timer(game: MafiaGame, bot: Bot):
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        log.error(f"Day timer error for {game.chat_id}: {e}")
+        log.error(f"Day timer error: {e}")
 
 
 async def end_day_phase(game: MafiaGame, bot: Bot):
     if game.phase != GamePhase.VOTING:
         return
-    game.phase = GamePhase.EXECUTION
     game.log("voting_ended", f"Day {game.day}")
 
     votes = {}
+    voter_count = 0
     for player in game.alive_players:
         if player.vote is not None and player.vote > 0:
             multiplier = 3 if player.role == Role.MER else 1
             votes[player.vote] = votes.get(player.vote, 0) + multiplier
+            voter_count += 1
+
+    # ── Anticheat: vote manipulation ──
+    if votes and len(game.alive_players) > 3:
+        max_votes = max(votes.values())
+        total_voters = sum(1 for p in game.alive_players if p.vote is not None and p.vote > 0)
+        if max_votes > total_voters:
+            log_anticheat(game.chat_id, 0, f"Suspicious vote count: {max_votes} > {total_voters}")
 
     eliminated = None
     if votes:
         max_votes = max(votes.values())
         top_voted = [t for t, v in votes.items() if v == max_votes]
-        elim_id = random.choice(top_voted)
-        eliminated = game.get_player(elim_id)
+
+        # ── Tie handling ──
+        if len(top_voted) > 1:
+            if game.vote_round < 3:
+                game.vote_round += 1
+                text = (
+                    f"{make_game_banner(GamePhase.VOTING, game.day)}\n\n"
+                    f"⚖️ <b>Ovozlar teng!</b>\n"
+                    f"Qayta ovoz berish ({game.vote_round}-tur)\n\n"
+                    f"Nomzodlar:\n" +
+                    "\n".join([f"• {game.get_player(t).display}" for t in top_voted if game.get_player(t)])
+                )
+                kb = make_players_keyboard(
+                    [p for p in game.alive_players if p.user_id in top_voted],
+                    "d_vote", chat_id=game.chat_id, columns=2
+                )
+                if game.game_msg_id:
+                    await safe_edit_message(bot, game.chat_id, game.game_msg_id, text, reply_markup=kb)
+                game.cancel_timers()
+                game.day_task = asyncio.create_task(day_timer(game, bot))
+                return
+            else:
+                elim_id = random.choice(top_voted)
+                eliminated = game.get_player(elim_id)
+        else:
+            elim_id = top_voted[0]
+            eliminated = game.get_player(elim_id)
+
         if eliminated:
             eliminated.alive = False
 
+    # ── Execution Phase (last words) ──
+    game.phase = GamePhase.EXECUTION
     text = f"{make_game_banner(GamePhase.EXECUTION, game.day)}\n\n"
+
     if eliminated:
         text += (
             f"🗳 <b>{eliminated.display}</b> eng ko'p ovoz oldi!\n"
-            f"Role: {ROLE_ICON.get(eliminated.role, '❓')} <b>{eliminated.role.value if eliminated.role else '?'}</b>\n\n"
+            f"Rol: {eliminated.role_display}\n\n"
         )
         if eliminated.role == Role.JOKER:
-            text += "🃏 Joker o'z maqsadiga erishdi! U yutdi!\n\n"
+            text += "🃏 Joker yutdi!\n\n"
         if game.advokat_protect == eliminated.user_id:
             eliminated.alive = True
-            text += f"⚖️ Advokat {eliminated.display} ni himoya qildi! U tirik qoldi!\n\n"
+            text += f"⚖️ Advokat {eliminated.display} ni himoya qildi!\n\n"
     else:
-        text += "Hech kim ovoz bermadi... Chetlatish yo'q.\n\n"
+        text += "Hech kim chetlatilmadi.\n\n"
 
     alive_list = "\n".join([make_player_card(p) for p in game.alive_players])
-    text += f"<b>Tirik o'yinchilar ({len(game.alive_players)}):</b>\n{alive_list}\n\n"
+    text += f"<b>Tirik ({len(game.alive_players)}):</b>\n{alive_list}\n\n"
 
     if game.game_msg_id:
         await safe_edit_message(bot, game.chat_id, game.game_msg_id, text)
@@ -951,12 +940,43 @@ async def end_day_phase(game: MafiaGame, bot: Bot):
         await end_game(game, bot, winner)
         return
 
-    text += f"🌙 <b>{game.day + 1}-tun boshlandi!</b>\nMaxsus rollar PM dan harakat qiling."
+    # ── Last words ──
+    if eliminated and eliminated.alive == False and eliminated.role != Role.JOKER:
+        await safe_send_message(
+            bot, eliminated.user_id,
+            f"💬 Siz chiqarildingiz! So'nggi so'zingizni yozing (30 soniya):\n"
+            f"/lastwords <matn>"
+        )
+        await asyncio.sleep(3)
+        if eliminated.last_words:
+            await safe_send_message(
+                bot, game.chat_id,
+                f"💬 <b>{eliminated.display}</b> ning so'nggi so'zlari:\n{eliminated.last_words}"
+            )
+
+    text2 = f"🌙 <b>{game.day + 1}-tun boshlandi!</b>\nMaxsus rollar PM dan harakat qiling."
     if game.game_msg_id:
-        await safe_edit_message(bot, game.chat_id, game.game_msg_id, text)
+        await safe_edit_message(bot, game.chat_id, game.game_msg_id, text2)
 
     await start_night_phase(game, bot)
 
+
+# ── ELO Rating ──
+
+async def update_elo_ratings(game: MafiaGame, winner: str):
+    players = [p for p in game.players.values() if not p.is_bot]
+    ratings = {p.user_id: get_profile(p.user_id).get("elo", 1000) for p in players}
+    for player in players:
+        for opponent in players:
+            if opponent.user_id == player.user_id:
+                continue
+            expected = expected_score(ratings[player.user_id], ratings[opponent.user_id])
+            score = 1.0 if player.team == winner else 0.0
+            delta = round(game.elo_k * (score - expected) / (len(players) - 1))
+            update_elo(player.user_id, delta)
+
+
+# ── End Game ──
 
 async def end_game(game: MafiaGame, bot: Bot, winner: str):
     game.phase = GamePhase.ENDED
@@ -970,13 +990,9 @@ async def end_game(game: MafiaGame, bot: Bot, winner: str):
         won = winner == player.team
         game_reward(player.user_id, won, player.name, player.username)
         update_weekly_score(player.user_id, 3 if won else 1)
-        profile = get_profile(player.user_id)
-        profile["games"] = profile.get("games", 0) + 1
-        if won:
-            profile["wins"] = profile.get("wins", 0) + 1
-        else:
-            profile["losses"] = profile.get("losses", 0) + 1
-        save_profile(player.user_id, profile)
+
+    await update_elo_ratings(game, winner)
+    await check_achievements(game, winner)
 
     winner_labels = {
         "town": "👤 <b>SHAHAR AHOLISI</b>",
@@ -1011,10 +1027,9 @@ async def continue_game(bot: Bot, chat_id: int):
         await bot.send_message(chat_id, f"{phase_banner}\n\n🌙 Tun davom etmoqda...")
         game.night_task = asyncio.create_task(night_timer(game, bot))
     elif game.phase == GamePhase.MORNING:
-        await bot.send_message(chat_id, f"{phase_banner}\n\n🌅 Ertalab... Natijalar kutilmoqda.")
+        await bot.send_message(chat_id, f"{phase_banner}\n\n🌅 Ertalab...")
     elif game.phase == GamePhase.VOTING:
-        await bot.send_message(chat_id, f"{phase_banner}\n\n🗳 Ovoz berish davom etmoqda.")
-        game.day_task = asyncio.create_task(day_timer(game, bot))
+        await bot.send_message(chat_id, f"{phase_banner}\n\n🗳 Ovoz berish...")
     elif game.phase == GamePhase.WAITING:
-        await bot.send_message(chat_id, "🔄 Bot qayta ishga tushdi. Lobby saqlanib qoldi.")
+        await bot.send_message(chat_id, "🔄 Bot qayta ishga tushdi.")
         await update_game_message(game, bot)

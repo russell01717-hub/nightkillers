@@ -249,3 +249,41 @@ class ActionPriority(int, Enum):
     KILL = 6
     VENGEFUL = 7
     LAST = 8
+
+
+ROLE_PRIORITY_MAP = {
+    Role.TRANSPORTER: ActionPriority.TRANSPORT,
+    Role.ROLEBLOCKER: ActionPriority.ROLEBLOCK,
+    Role.SILENCER: ActionPriority.BLACKMAIL_SILENCE,
+    Role.BLACKMAILER: ActionPriority.BLACKMAIL_SILENCE,
+    Role.KOMISSAR: ActionPriority.INVESTIGATE,
+    Role.DETEKTIV: ActionPriority.INVESTIGATE,
+    Role.TERGOVCHI: ActionPriority.INVESTIGATE,
+    Role.CONSIGLIERE: ActionPriority.INVESTIGATE,
+    Role.IZQUVAR: ActionPriority.INVESTIGATE,
+    Role.KUZATUVCHI: ActionPriority.INVESTIGATE,
+    Role.PSIXOLOG: ActionPriority.INVESTIGATE,
+    Role.MUHANDIS: ActionPriority.INVESTIGATE,
+    Role.SPY: ActionPriority.INVESTIGATE,
+    Role.ORACLE: ActionPriority.INVESTIGATE,
+    Role.DOKTOR: ActionPriority.PROTECT,
+    Role.HAMSHIRA: ActionPriority.PROTECT,
+    Role.PRIEST: ActionPriority.PROTECT,
+    Role.QORIQCHI: ActionPriority.PROTECT,
+    Role.MAFIA: ActionPriority.KILL,
+    Role.DON: ActionPriority.KILL,
+    Role.GODFATHER: ActionPriority.KILL,
+    Role.MANIYAK: ActionPriority.KILL,
+    Role.ASSASSIN: ActionPriority.KILL,
+    Role.PROFESSIONAL: ActionPriority.KILL,
+    Role.BOMBER: ActionPriority.KILL,
+    Role.POISONER: ActionPriority.KILL,
+    Role.VIGILANTE: ActionPriority.KILL,
+    Role.ARSONIST: ActionPriority.KILL,
+    Role.VETERAN: ActionPriority.VENGEFUL,
+    Role.JAILOR: ActionPriority.LAST,
+    Role.WITCH: ActionPriority.LAST,
+    Role.FRAMER: ActionPriority.LAST,
+    Role.JANITOR: ActionPriority.LAST,
+    Role.FORGER: ActionPriority.LAST,
+}
