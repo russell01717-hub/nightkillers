@@ -15,6 +15,9 @@ from aiogram.types import (
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError
 
 from ..models import MafiaGame, Player, games, GamePhase
+
+# Track user's selected payment amount
+pending_payment: Dict[int, int] = {}
 from ..roles import (
     Role, ROLE_ICON, ROLE_DISPLAY, ROLE_DESC, ROLE_TEAM, ROLE_PRICES,
     distribute_roles, IS_NIGHT_ACTIVE
@@ -70,6 +73,7 @@ def register(dp, bot: Bot):
     dp.message.register(cmd_achievements, Command("achievements"))
     dp.message.register(cmd_elo, Command("elo"))
     dp.message.register(handle_photo, F.photo)
+    dp.callback_query.register(handle_pay_select, F.data.startswith("pay:"))
 
 
 async def is_group_admin(bot: Bot, chat_id: int, user_id: int) -> bool:
@@ -763,41 +767,57 @@ async def cmd_pay(message: Message, bot: Bot):
     if message.chat.type != "private":
         await message.answer("ℹ️ To'lov uchun botga yozing: @Nightkillersbot")
         return
-    args = message.text.split()
-    amount = 50
-    if len(args) > 1:
-        try:
-            amount = max(10, min(100000, int(args[1])))
-        except ValueError:
-            pass
-    text = (
+
+    amounts = [
+        ("50 olmos — 5 000 so'm", "pay:50"),
+        ("100 olmos — 10 000 so'm", "pay:100"),
+        ("200 olmos — 18 000 so'm", "pay:200"),
+        ("300 olmos — 26 000 so'm", "pay:300"),
+        ("500 olmos — 45 000 so'm", "pay:500"),
+        ("1000 olmos — 80 000 so'm", "pay:1000"),
+        ("5000 olmos — 350 000 so'm", "pay:5000"),
+        ("10000 olmos — 600 000 so'm", "pay:10000"),
+    ]
+    kb = make_inline_keyboard([
+        [InlineKeyboardButton(text=label, callback_data=cb)] for label, cb in amounts
+    ])
+    await message.answer(
         f"💳 <b>To'lov</b>\n\n"
-        f"Karta: <code>{CARD_NUMBER}</code>\n"
-        f"Summa: {amount}💎\n\n"
+        f"Karta: <code>{CARD_NUMBER}</code>\n\n"
         f"<b>Narxlar:</b>\n"
         f"50 olmos — 5 000 so'm\n"
         f"100 olmos — 10 000 so'm\n"
+        f"200 olmos — 18 000 so'm\n"
+        f"300 olmos — 26 000 so'm\n"
         f"500 olmos — 45 000 so'm\n"
         f"1000 olmos — 80 000 so'm\n"
         f"5000 olmos — 350 000 so'm\n"
         f"10000 olmos — 600 000 so'm\n\n"
-        f"To'lov qilgach, chek rasmini shu yerga yuboring.\n"
-        f"Admin tasdiqlagach +{amount}💎 hisobingizga tushadi."
+        f"Miqdorni tanlang va chek rasmini yuboring.",
+        reply_markup=kb,
+        parse_mode="HTML"
     )
-    await message.answer(text, parse_mode="HTML")
+
+
+async def handle_pay_select(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    amount = int(callback.data.split(":")[1])
+    pending_payment[callback.from_user.id] = amount
+    await callback.message.edit_text(
+        f"✅ {amount}💎 tanlandi.\n\n"
+        f"Karta: <code>{CARD_NUMBER}</code>\n\n"
+        f"Aynan {amount} so'mni o'tkazing va chek rasmini yuboring.\n"
+        f"Admin tekshirib, +{amount}💎 hisobingizga qo'shadi.",
+        parse_mode="HTML"
+    )
 
 
 async def handle_photo(message: Message, bot: Bot):
     user = message.from_user
     if message.chat.type != "private":
         return
-    from ..economy import get_profile
-    profile = get_profile(user.id, user.first_name, user.username or "")
+    amount = pending_payment.pop(user.id, 50)
     caption = message.caption or ""
-    # extract amount from caption or default to 50
-    amount = 50
-    if caption.strip().isdigit():
-        amount = max(10, min(100000, int(caption.strip())))
     text = (
         f"📸 Chek rasmi qabul qilindi!\n\n"
         f"Admin tekshirib, olmoslarni hisobingizga qo'shadi.\n"
