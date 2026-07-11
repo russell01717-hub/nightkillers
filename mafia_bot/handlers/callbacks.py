@@ -440,9 +440,13 @@ async def handle_night_vigilante(callback: CallbackQuery, bot: Bot):
         await callback.message.answer("❌ Siz Vigilante emassiz!")
         return
 
+    if game.vigilante_bullets <= 0:
+        await callback.message.answer("❌ O'qlar tugadi!")
+        return
     game.vigilante_target = target_id
+    game.vigilante_bullets -= 1
     game.action_ready[user_id] = True
-    await safe_send_message(bot, user_id, f"🔫 {game.get_player(target_id).display} nishonga olindi!")
+    await safe_send_message(bot, user_id, f"🔫 {game.get_player(target_id).display} nishonga olindi! (Qolgan o'q: {game.vigilante_bullets})")
 
 
 async def handle_night_transport1(callback: CallbackQuery, bot: Bot):

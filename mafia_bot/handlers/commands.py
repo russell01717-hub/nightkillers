@@ -550,7 +550,7 @@ async def cmd_profile(message: Message, bot: Bot):
         f"├ 💀 Mag'lubiyatlar: {losses}\n"
         f"├ 📊 Winrate: {winrate}%\n"
         f"├ 🎭 Sotib olingan rol: {bought if bought else 'Yoq'}\n"
-        f"└ 🦸 Hero: {'✅' if hero else '❌'} (H: {profile.get('hero_attack', 0)} D: {profile.get('hero_defense', 0)})",
+        f"└ 🦸 Hero: {'✅' if hero else '❌'}",
         parse_mode="HTML"
     )
 

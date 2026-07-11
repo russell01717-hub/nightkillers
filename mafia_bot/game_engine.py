@@ -152,19 +152,10 @@ def check_winner(game: MafiaGame) -> Optional[str]:
     town_alive = len([p for p in alive if p.team == "town"])
     neutral_alive = len([p for p in alive if p.team == "neutral"])
     if neutral_alive >= 1 and mafia_alive + town_alive == 0:
-        neutrals = [p for p in alive if p.team == "neutral"]
-        if len(neutrals) == 1:
-            return "neutral"
-        if all(
-            p.role in (Role.SURVIVOR, Role.JOKER, Role.AMNESIAC, Role.EXECUTIONER)
-            for p in neutrals
-        ):
-            return "neutral"
+        return "neutral"
     if mafia_alive == 0:
         return "town"
-    if mafia_alive >= town_alive and neutral_alive == 0:
-        return "mafia"
-    if mafia_alive >= (town_alive + neutral_alive):
+    if mafia_alive >= town_alive + neutral_alive:
         return "mafia"
     return None
 
@@ -327,11 +318,15 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
             )
             game.action_ready[player.user_id] = False
         elif role == Role.VIGILANTE:
+            if game.vigilante_bullets <= 0:
+                await safe_send_message(bot, player.user_id, f"🔫 O'qlar tugadi! Siz otolmaysiz.")
+                game.action_ready[player.user_id] = True
+                continue
             targets = [p for p in game.alive_players if p.user_id != player.user_id]
             kb = make_players_keyboard(targets, "nv_vigilante", chat_id=cid)
             await safe_send_message(
                 bot, player.user_id,
-                f"🔫 <b>{game.day}-tun</b>\n\nKimni otamiz? (Agar begunoh bo'lsa, o'zingiz o'lasiz)",
+                f"🔫 <b>{game.day}-tun</b>\n\nKimni otamiz? (Agar begunoh bo'lsa, o'zingiz o'lasiz)\nQolgan o'q: {game.vigilante_bullets}",
                 reply_markup=kb
             )
             game.action_ready[player.user_id] = False
@@ -970,6 +965,8 @@ async def end_game(game: MafiaGame, bot: Bot, winner: str):
     game.log("game_ended", f"Winner: {winner}")
 
     for player in game.players.values():
+        if player.is_bot:
+            continue
         won = winner == player.team
         game_reward(player.user_id, won, player.name, player.username)
         update_weekly_score(player.user_id, 3 if won else 1)

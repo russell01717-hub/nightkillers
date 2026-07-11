@@ -122,6 +122,7 @@ class MafiaGame:
     transporter_target2: Optional[int] = None
     jailor_target: Optional[int] = None
     vigilante_target: Optional[int] = None
+    vigilante_bullets: int = 2
     veteran_active: bool = False
     maniyak_target: Optional[int] = None
     arsonist_targets: List[int] = field(default_factory=list)
@@ -282,6 +283,7 @@ class MafiaGame:
             "transporter_target1": self.transporter_target1,
             "transporter_target2": self.transporter_target2,
             "jailor_target": self.jailor_target, "vigilante_target": self.vigilante_target,
+            "vigilante_bullets": self.vigilante_bullets,
             "veteran_active": self.veteran_active, "maniyak_target": self.maniyak_target,
             "arsonist_targets": self.arsonist_targets, "arsonist_ignite": self.arsonist_ignite,
             "assassin_target": self.assassin_target, "bomber_target": self.bomber_target,
@@ -328,6 +330,7 @@ class MafiaGame:
         game.transporter_target2 = data.get("transporter_target2")
         game.jailor_target = data.get("jailor_target")
         game.vigilante_target = data.get("vigilante_target")
+        game.vigilante_bullets = data.get("vigilante_bullets", 2)
         game.veteran_active = data.get("veteran_active", False)
         game.maniyak_target = data.get("maniyak_target")
         game.arsonist_targets = data.get("arsonist_targets", [])
