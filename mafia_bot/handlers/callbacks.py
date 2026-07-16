@@ -836,9 +836,8 @@ async def handle_confirm_pay(callback: CallbackQuery, bot: Bot):
     amount = int(parts[2]) if len(parts) > 2 else 50
     from ..economy import add_olmos
     add_olmos(user_id, amount)
-    await callback.message.edit_text(
-        f"{callback.message.html_text}\n\n✅ To'lov tasdiqlandi! +{amount}💎"
-    )
+    text = f"{callback.message.caption or callback.message.html_text or ''}\n\n✅ To'lov tasdiqlandi! +{amount}💎"
+    await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text)
     await bot.send_message(user_id, f"✅ To'lovingiz tasdiqlandi! +{amount}💎 hisobingizga tushdi.")
 
 
@@ -847,9 +846,8 @@ async def handle_reject_pay(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split(":")
     user_id = int(parts[1])
     amount = int(parts[2]) if len(parts) > 2 else 50
-    await callback.message.edit_text(
-        f"{callback.message.html_text}\n\n❌ To'lov rad etildi."
-    )
+    text = f"{callback.message.caption or callback.message.html_text or ''}\n\n❌ To'lov rad etildi."
+    await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text)
     await bot.send_message(user_id, f"❌ {amount}💎 to'lovingiz rad etildi. Admin bilan bog'lanib ko'ring.")
 
 
