@@ -513,7 +513,6 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
             await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nKutib turing...")
             game.action_ready[player.user_id] = True
 
-        await asyncio.sleep(0.05)
 
     game.night_task = asyncio.create_task(night_timer(game, bot))
 

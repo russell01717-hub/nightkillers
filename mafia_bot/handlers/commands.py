@@ -332,7 +332,6 @@ async def cmd_startgame(message: Message, bot: Bot):
         result = await safe_send_message(bot, player.user_id, role_text)
         if result is None:
             blocked_users.append(player.display)
-        await asyncio.sleep(0.05)
 
     if blocked_users:
         await message.answer(
