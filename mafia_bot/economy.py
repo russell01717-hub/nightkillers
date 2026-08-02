@@ -99,12 +99,12 @@ def get_role_price(role: Role) -> int:
 def buy_role(user_id: int, role: Role) -> tuple[bool, str]:
     price = get_role_price(role)
     profile = get_profile(user_id)
-    if profile.get("olmos", 0) < price:
-        return False, f"Sizda yetarli olmos yo'q ({price}💎 kerak, sizda: {profile.get('olmos', 0)}💎)"
-    profile["olmos"] -= price
+    if profile.get("evro", 0) < price:
+        return False, f"Sizda yetarli evro yo'q ({price}💶 kerak, sizda: {profile.get('evro', 0)}💶)"
+    profile["evro"] -= price
     profile["bought_role"] = role.value
     save_profile(user_id, profile)
-    return True, f"Siz {role.value} rolini {price}💎 ga sotib oldingiz!"
+    return True, f"Siz {role.value} rolini {price}💶 ga sotib oldingiz!"
 
 
 def game_reward(user_id: int, won: bool, name: str = "", username: str = "") -> dict:
@@ -142,5 +142,5 @@ def get_shop_text(user_id: int) -> str:
     for role in Role:
         price = ROLE_PRICES.get(role, 0)
         icon = "✅" if role.value == bought else ROLE_ICON.get(role, "❓")
-        lines.append(f"{icon} {role.value} — {price}💎")
+        lines.append(f"{icon} {role.value} — {price}💶")
     return "\n".join(lines)
