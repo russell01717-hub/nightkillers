@@ -815,7 +815,7 @@ async def handle_shop_buy(callback: CallbackQuery, bot: Bot):
     profile = get_profile(user_id)
     text = get_shop_text(user_id)
     roles_text = "\n".join([
-        f"• /buy {r.value} — {ROLE_PRICES.get(r, 30)}💶"
+        f"• /buy {r.value} — {ROLE_PRICES.get(r, 30)}💎"
         for r in Role
     ])
     await callback.message.edit_text(
