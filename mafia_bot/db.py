@@ -49,6 +49,14 @@ def init_db():
             conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} DEFAULT 0")
         except Exception:
             pass
+    for col in ["elo", "achievements", "items"]:
+        try:
+            if col == "items":
+                conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} TEXT DEFAULT '{{}}'")
+            else:
+                conn.execute(f"ALTER TABLE profiles ADD COLUMN {col} DEFAULT 0")
+        except Exception:
+            pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS weekly_scores (
             user_id INTEGER,
@@ -132,8 +140,20 @@ def get_profile(user_id: int, name: str = "", username: str = "") -> dict:
             "games": 0, "wins": 0, "losses": 0,
             "bought_role": None, "hero": 0,
             "hero_attack": 0, "hero_defense": 0, "last_daily": None,
+            "items": {},
+            "elo": 1000,
         }
-    return dict(row)
+    d = dict(row)
+    if d.get("items"):
+        try:
+            d["items"] = json.loads(d["items"])
+        except Exception:
+            d["items"] = {}
+    else:
+        d["items"] = {}
+    if "elo" not in d:
+        d["elo"] = 1000
+    return d
 
 
 def save_profile(user_id: int, data: dict):
@@ -142,7 +162,7 @@ def save_profile(user_id: int, data: dict):
         UPDATE profiles SET
             name=?, username=?, olmos=?, evro=?,
             games=?, wins=?, losses=?, bought_role=?, hero=?,
-            hero_attack=?, hero_defense=?, last_daily=?
+            hero_attack=?, hero_defense=?, last_daily=?, elo=?, items=?
         WHERE user_id=?
     """, (
         data.get("name", ""), data.get("username", ""),
@@ -150,7 +170,8 @@ def save_profile(user_id: int, data: dict):
         data.get("games", 0), data.get("wins", 0), data.get("losses", 0),
         data.get("bought_role"), data.get("hero", 0),
         data.get("hero_attack", 0), data.get("hero_defense", 0),
-        data.get("last_daily"), user_id
+        data.get("last_daily"), data.get("elo", 0),
+        json.dumps(data.get("items", {})), user_id
     ))
     conn.commit()
 

@@ -26,7 +26,6 @@ log = logging.getLogger("MafiaBot.Callbacks")
 
 
 def register(dp, bot: Bot):
-    dp.callback_query.register(handle_callback, F.data.startswith("start_"))
     dp.callback_query.register(handle_join, F.data.startswith("join:"))
     dp.callback_query.register(handle_leave, F.data.startswith("leave:"))
     dp.callback_query.register(handle_night_kill, F.data.startswith("nv_kill:"))
@@ -71,7 +70,7 @@ def register(dp, bot: Bot):
     dp.callback_query.register(handle_confirm_pay, F.data.startswith("confirm_pay:"))
     dp.callback_query.register(handle_reject_pay, F.data.startswith("reject_pay:"))
 
-    # Start menu handlers
+    # Start menu handlers (specific first, generic last)
     dp.callback_query.register(show_profile, F.data == "start_profile")
     dp.callback_query.register(show_money, F.data == "start_money")
     dp.callback_query.register(show_top, F.data == "start_top")
@@ -80,6 +79,10 @@ def register(dp, bot: Bot):
     dp.callback_query.register(show_help, F.data == "start_help")
     dp.callback_query.register(show_about, F.data == "start_about")
     dp.callback_query.register(show_weekly, F.data == "start_weekly")
+    dp.callback_query.register(show_back, F.data == "start_back")
+
+    # Fallback: acknowledge any unmatched start_* callback (registered LAST)
+    dp.callback_query.register(handle_callback, F.data.startswith("start_"))
 
 
 async def handle_callback(callback: CallbackQuery, bot: Bot):
@@ -836,7 +839,8 @@ async def handle_confirm_pay(callback: CallbackQuery, bot: Bot):
     amount = int(parts[2]) if len(parts) > 2 else 50
     from ..economy import add_olmos
     add_olmos(user_id, amount)
-    text = f"{callback.message.caption or callback.message.html_text or ''}\n\n✅ To'lov tasdiqlandi! +{amount}💎"
+    prev = getattr(callback.message, "caption", None) or getattr(callback.message, "html_text", None) or getattr(callback.message, "text", None) or ""
+    text = f"{prev}\n\n✅ To'lov tasdiqlandi! +{amount}💎"
     await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text)
     await bot.send_message(user_id, f"✅ To'lovingiz tasdiqlandi! +{amount}💎 hisobingizga tushdi.")
 
@@ -846,7 +850,8 @@ async def handle_reject_pay(callback: CallbackQuery, bot: Bot):
     parts = callback.data.split(":")
     user_id = int(parts[1])
     amount = int(parts[2]) if len(parts) > 2 else 50
-    text = f"{callback.message.caption or callback.message.html_text or ''}\n\n❌ To'lov rad etildi."
+    prev = getattr(callback.message, "caption", None) or getattr(callback.message, "html_text", None) or getattr(callback.message, "text", None) or ""
+    text = f"{prev}\n\n❌ To'lov rad etildi."
     await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text)
     await bot.send_message(user_id, f"❌ {amount}💎 to'lovingiz rad etildi. Admin bilan bog'lanib ko'ring.")
 
@@ -946,6 +951,24 @@ async def show_stats_cb(callback: CallbackQuery, bot: Bot):
     await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text, reply_markup=kb)
 
 
+async def show_settings(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    text = (
+        "⚙️ <b>Sozlamalar</b>\n\n"
+        "Bu yerda o'yin sozlamalarini o'zgartirishingiz mumkin:\n\n"
+        "🔧 <b>Mavjud sozlamalar:</b>\n"
+        "• Til: O'zbekcha (standart)\n"
+        "• Xabarnomalar: Yoqilgan\n"
+        "• Ovoz berish vaqti: 45 soniya\n"
+        "• Tungi vaqti: 45 soniya\n\n"
+        "<i>Admin buyruqlari: /admin</i>"
+    )
+    kb = make_inline_keyboard([
+        [InlineKeyboardButton(text="◀️ Ortga", callback_data="start_back")],
+    ])
+    await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text, reply_markup=kb)
+
+
 async def show_help(callback: CallbackQuery, bot: Bot):
     await callback.answer()
     text = (
@@ -1014,3 +1037,34 @@ async def show_weekly(callback: CallbackQuery, bot: Bot):
         bot, callback.message.chat.id, callback.message.message_id,
         "\n".join(lines), parse_mode="HTML"
     )
+
+
+async def show_back(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    from mafia_bot.config import BOT_NAMES
+    import random
+    bot_name = random.choice(BOT_NAMES)
+    text = (
+        f"🌙 <b>Night Killers</b> — Mafia o'yini\n\n"
+        f"Salom, {callback.from_user.first_name}!\n\n"
+        f"👤 <b>Profil:</b> /profil\n"
+        f"💰 <b>Hisob:</b> /money\n"
+        f"🏆 <b>Reyting:</b> /hafta\n"
+        f"🛒 <b>Do'kon:</b> /shop\n"
+        f"📊 <b>Statistika:</b> /stats\n"
+        f"❓ <b>Yordam:</b> /help\n\n"
+        f"O'yin yaratish: /mafia\n"
+        f"Qatnashish: /join"
+    )
+    kb = make_inline_keyboard([
+        [InlineKeyboardButton(text="👤 Profil", callback_data="start_profile"),
+         InlineKeyboardButton(text="💰 Hisob", callback_data="start_money")],
+        [InlineKeyboardButton(text="🏆 Reyting", callback_data="start_top"),
+         InlineKeyboardButton(text="📊 Statistika", callback_data="start_stats")],
+        [InlineKeyboardButton(text="🛒 Do'kon", callback_data="start_shop"),
+         InlineKeyboardButton(text="⚙️ Sozlamalar", callback_data="start_settings")],
+        [InlineKeyboardButton(text="❓ Yordam", callback_data="start_help"),
+         InlineKeyboardButton(text="ℹ️ Haqida", callback_data="start_about")],
+        [InlineKeyboardButton(text="🏆 Haftalik", callback_data="start_weekly")],
+    ])
+    await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text, reply_markup=kb)

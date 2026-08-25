@@ -351,7 +351,7 @@ test("Mafia wins over neutral", test_mafia_wins_over_neutral)
 print("\n--- PHASE TRANSITIONS ---")
 
 def test_phase_values():
-    assert GamePhase.WAITING.value == "waiting"
+    assert GamePhase.WAITING.value == "registration"
     assert GamePhase.NIGHT.value == "night"
     assert GamePhase.VOTING.value == "voting"
     assert GamePhase.ENDED.value == "ended"

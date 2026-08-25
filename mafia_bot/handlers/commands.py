@@ -28,6 +28,22 @@ from ..db import (
     get_weekly_top, get_weekly_titles_dict, save_weekly_title,
     get_all_profiles, delete_active_game
 )
+
+# Flood control
+import time
+cooldown: Dict[int, float] = {}
+chat_cooldown: Dict[int, float] = {}
+
+def check_flood(user_id: int, chat_id: Optional[int] = None) -> bool:
+    now = time.time()
+    if user_id in cooldown and now - cooldown[user_id] < 0.8:
+        return True
+    cooldown[user_id] = now
+    if chat_id is not None:
+        if chat_id in chat_cooldown and now - chat_cooldown[chat_id] < 0.5:
+            return True
+        chat_cooldown[chat_id] = now
+    return False
 from ..economy import (
     add_olmos, spend_olmos, spend_evro, transfer_olmos,
     can_claim_daily, claim_daily, buy_role, get_shop_text,
@@ -852,7 +868,7 @@ async def cmd_buy(message: Message, bot: Bot):
     args = message.text.split()
     if len(args) < 2:
         await message.answer(
-            "📝 Farmat: /buy <rol nomi>\n"
+            "📝 Farmat: /buy <code>rol nomi</code>\n"
             "Rollar ro'yxati: /shop",
             parse_mode="HTML"
         )

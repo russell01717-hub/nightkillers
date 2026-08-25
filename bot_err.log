@@ -1,0 +1,81 @@
+2026-08-11 11:25:25 [INFO] MafiaBot: Starting Night Killers v5.0...
+2026-08-11 11:25:27 [INFO] MafiaBot: Bot is running. Press Ctrl+C to stop.
+2026-08-11 11:25:27 [INFO] MafiaBot: Bot started!
+2026-08-11 11:25:27 [INFO] aiogram.dispatcher: Start polling
+2026-08-11 11:25:27 [INFO] aiogram.dispatcher: Run polling for bot @Nightkillersbot id=8928310354 - 'NightKillers'
+2026-08-11 11:28:01 [INFO] aiogram.event: Update id=192576509 is handled. Duration 472 ms by bot id=8928310354
+2026-08-11 11:28:03 [INFO] aiogram.event: Update id=192576510 is handled. Duration 421 ms by bot id=8928310354
+2026-08-11 11:28:05 [INFO] aiogram.event: Update id=192576511 is handled. Duration 410 ms by bot id=8928310354
+2026-08-11 11:28:08 [INFO] aiogram.event: Update id=192576512 is handled. Duration 429 ms by bot id=8928310354
+2026-08-11 11:28:12 [INFO] aiogram.event: Update id=192576513 is handled. Duration 283 ms by bot id=8928310354
+2026-08-11 11:28:15 [ERROR] MafiaBot: Global error: Telegram server says - Bad Request: can't parse entities: Unsupported start tag "rol" at byte offset 18
+Traceback (most recent call last):
+  File "D:\pylibs\aiogram\dispatcher\middlewares\error.py", line 27, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\middlewares\user_context.py", line 58, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\fsm\middleware.py", line 43, in __call__
+    return await handler(event, data)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\event\telegram.py", line 126, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\event\handler.py", line 71, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\dispatcher.py", line 283, in _listen_update
+    return await self.propagate_event(update_type=update_type, event=event, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\router.py", line 165, in propagate_event
+    return await observer.wrap_outer_middleware(_wrapped, event=event, data=kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\router.py", line 157, in _wrapped
+    return await self._propagate_event(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<4 lines>...
+    )
+    ^
+  File "D:\pylibs\aiogram\dispatcher\router.py", line 185, in _propagate_event
+    response = await observer.trigger(event, **kwargs)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\event\telegram.py", line 126, in trigger
+    return await wrapped_inner(event, kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\dispatcher\event\handler.py", line 71, in call
+    return await wrapped()
+           ^^^^^^^^^^^^^^^
+  File "D:\3D\mafia_bot\handlers\commands.py", line 854, in cmd_buy
+    await message.answer(
+    ...<3 lines>...
+    )
+  File "D:\pylibs\aiogram\methods\base.py", line 82, in emit
+    return await bot(self)
+           ^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\client\bot.py", line 509, in __call__
+    return await self.session(self, method, timeout=request_timeout)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\client\session\base.py", line 259, in __call__
+    return cast(TelegramType, await middleware(bot, method))
+                              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\pylibs\aiogram\client\session\aiohttp.py", line 177, in make_request
+    response = self.check_response(
+        bot=bot,
+    ...<2 lines>...
+        content=raw_result,
+    )
+  File "D:\pylibs\aiogram\client\session\base.py", line 121, in check_response
+    raise TelegramBadRequest(method=method, message=description)
+aiogram.exceptions.TelegramBadRequest: Telegram server says - Bad Request: can't parse entities: Unsupported start tag "rol" at byte offset 18
+2026-08-11 11:28:15 [INFO] aiogram.event: Update id=192576514 is handled. Duration 454 ms by bot id=8928310354
+2026-08-11 11:28:17 [INFO] aiogram.event: Update id=192576515 is handled. Duration 350 ms by bot id=8928310354
+2026-08-11 11:28:19 [INFO] aiogram.event: Update id=192576516 is handled. Duration 618 ms by bot id=8928310354
+2026-08-11 11:28:21 [INFO] aiogram.event: Update id=192576517 is handled. Duration 321 ms by bot id=8928310354
+2026-08-11 11:28:24 [INFO] aiogram.event: Update id=192576518 is handled. Duration 638 ms by bot id=8928310354
+2026-08-11 11:28:28 [INFO] aiogram.event: Update id=192576519 is handled. Duration 281 ms by bot id=8928310354
+2026-08-11 11:28:32 [INFO] aiogram.event: Update id=192576520 is handled. Duration 621 ms by bot id=8928310354
+2026-08-11 11:28:35 [INFO] aiogram.event: Update id=192576521 is handled. Duration 268 ms by bot id=8928310354
+2026-08-11 11:28:41 [INFO] aiogram.event: Update id=192576522 is handled. Duration 561 ms by bot id=8928310354
+2026-08-11 11:28:43 [INFO] aiogram.event: Update id=192576523 is handled. Duration 365 ms by bot id=8928310354
+2026-08-11 11:29:05 [INFO] aiogram.event: Update id=192576524 is handled. Duration 751 ms by bot id=8928310354

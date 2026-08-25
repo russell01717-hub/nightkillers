@@ -2,7 +2,7 @@ from enum import Enum
 
 
 class GamePhase(str, Enum):
-    WAITING = "waiting"
+    WAITING = "registration"
     STARTING = "starting"
     ROLE_ASSIGN = "role_assign"
     NIGHT = "night"
@@ -195,6 +195,25 @@ IS_NIGHT_ACTIVE = {
     Role.EXECUTIONER: False, Role.WITCH: True, Role.SURVIVOR: False,
     Role.AMNESIAC: True, Role.ASSASSIN: True, Role.BOMBER: True,
     Role.POISONER: True, Role.PROFESSIONAL: True,
+}
+
+
+MODE_ROLES = {
+    "classic": [
+        Role.DON, Role.MAFIA, Role.KOMISSAR, Role.DOKTOR, Role.QORIQCHI,
+        Role.TERGOVCHI, Role.MER, Role.VETERAN, Role.MUHANDIS, Role.SPY,
+        Role.JAILOR, Role.TRANSPORTER, Role.KUZATUVCHI, Role.IZQUVAR,
+        Role.TINCH
+    ],
+    "full": [
+        Role.DON, Role.MAFIA, Role.GODFATHER, Role.KOMISSAR, Role.DOKTOR,
+        Role.QORIQCHI, Role.TERGOVCHI, Role.MER, Role.VETERAN, Role.MUHANDIS,
+        Role.SPY, Role.JAILOR, Role.TRANSPORTER, Role.KUZATUVCHI, Role.IZQUVAR,
+        Role.DETEKTIV, Role.PSIXOLOG, Role.PRIEST, Role.HAMSHIRA,
+        Role.MANIYAK, Role.JOKER, Role.ARSONIST, Role.WITCH, Role.SURVIVOR,
+        Role.EXECUTIONER, Role.ASSASSIN, Role.BOMBER, Role.PROFESSIONAL,
+        Role.POISONER, Role.VIGILANTE, Role.AMNESIAC, Role.TINCH
+    ]
 }
 
 

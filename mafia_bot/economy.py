@@ -144,3 +144,22 @@ def get_shop_text(user_id: int) -> str:
         icon = "✅" if role.value == bought else ROLE_ICON.get(role, "❓")
         lines.append(f"{icon} {role.value} — {price}💶")
     return "\n".join(lines)
+
+
+def dist_weekly_prizes(w: dict):
+    if not w or not w.get("players"):
+        return
+    sorted_u = sorted(w["players"].items(), key=lambda x: x[1].get("score", 0), reverse=True)[:50]
+    for i, (uid_str, data) in enumerate(sorted_u, 1):
+        uid = int(uid_str)
+        rank = i
+        if rank == 1:
+            add_olmos(uid, 45)
+        elif rank <= 10:
+            add_olmos(uid, 10)
+        elif rank <= 20:
+            add_olmos(uid, 4)
+        else:
+            profile = get_profile(uid)
+            profile["evro"] = profile.get("evro", 0) + 500
+            save_profile(uid, profile)

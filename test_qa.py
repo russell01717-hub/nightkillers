@@ -99,7 +99,8 @@ def economy_tests():
     test("Yangi profil yaratish", create_profile)
 
     def add_olmos_overflow():
-        import tempfile, os
+        from mafia_bot.db import get_db
+        get_db().execute("DELETE FROM profiles WHERE user_id = ?", (TEST_UID + 1,)); get_db().commit()
         from mafia_bot import get_profile, add_olmos
         get_profile(TEST_UID + 1, "Overflow")
         add_olmos(TEST_UID + 1, 10**12)
@@ -159,21 +160,18 @@ def game_tests():
     test("O'lik o'yinchini topish", find_game_dead)
 
     def role_distribution():
-        from mafia_bot import MafiaGame
-        game = MafiaGame(TEST_CHAT, "classic")
+        from mafia_bot import MafiaGame, Player, Role, distribute_roles
+        game = MafiaGame(TEST_CHAT)
         for i in range(6):
-            game.players[i] = __import__('mafia_bot', fromlist=['Player']).Player(i, f"P{i}")
-        from mafia_bot import MODE_ROLES
-        pool = MODE_ROLES["classic"]
-        base = [r for r in pool if r != "Tinch aholi"]
-        assigned = base[:6]
+            game.players[i] = Player(i, f"P{i}")
+        assigned = distribute_roles(6)
         for p, role in zip(game.players.values(), assigned):
             p.role = role
         roles = [p.role for p in game.players.values()]
-        assert "Don" in roles
-        assert "Mafia" in roles
-        assert "Komissar" in roles
-        assert "Shifokor" in roles
+        assert Role.DON in roles
+        assert Role.MAFIA in roles
+        assert Role.KOMISSAR in roles
+        assert Role.DOKTOR in roles
     test("Rol taqsimoti (classic)", role_distribution)
 
     def check_win_village():

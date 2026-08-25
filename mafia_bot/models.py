@@ -383,3 +383,15 @@ class MafiaGame:
 
 
 games: Dict[int, MafiaGame] = {}
+ghosts: Dict[int, Dict[int, Player]] = {}
+
+
+def find_game(uid: int, chat_id: Optional[int] = None) -> Optional[MafiaGame]:
+    if chat_id and chat_id in games:
+        g = games[chat_id]
+        if uid in g.players:
+            return g
+    for g in games.values():
+        if uid in g.players:
+            return g
+    return None
