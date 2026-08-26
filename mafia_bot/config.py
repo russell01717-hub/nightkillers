@@ -16,3 +16,5 @@ BOT_NAMES = [
     "Paul", "Quinn", "Rita", "Sam", "Tina", "Uma", "Vince", "Wendy",
     "Xander", "Yara", "Zack",
 ]
+
+STARS_PER_OLMOS = int(os.environ.get("STARS_PER_OLMOS", "100"))

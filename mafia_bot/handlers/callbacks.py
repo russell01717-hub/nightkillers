@@ -62,6 +62,14 @@ def register(dp, bot: Bot):
     dp.callback_query.register(handle_night_framer, F.data.startswith("nv_framer:"))
     dp.callback_query.register(handle_night_janitor, F.data.startswith("nv_janitor:"))
     dp.callback_query.register(handle_night_forger, F.data.startswith("nv_forger:"))
+
+    # Bloody Mode night handlers
+    dp.callback_query.register(handle_night_mashuqa, F.data.startswith("nv_mashuqa:"))
+    dp.callback_query.register(handle_night_kamikaze, F.data.startswith("nv_kamikaze:"))
+    dp.callback_query.register(handle_night_buqalamun, F.data.startswith("nv_buqalamun:"))
+    dp.callback_query.register(handle_night_suidsid, F.data.startswith("nv_suidsid:"))
+    dp.callback_query.register(handle_night_kimyogar, F.data.startswith("nv_kimyogar:"))
+
     dp.callback_query.register(handle_day_vote, F.data.startswith("d_vote:"))
     dp.callback_query.register(handle_day_skip, F.data.startswith("d_skip:"))
     dp.callback_query.register(handle_day_advokat, F.data.startswith("d_advokat:"))
@@ -709,7 +717,65 @@ async def handle_night_janitor(callback, bot): await _night_target_handler(callb
 async def handle_night_forger(callback, bot): await _night_target_handler(callback, bot, Role.FORGER, "forger_target")
 
 
-# ── Day phase ──
+# Bloody Mode night handlers
+async def handle_night_mashuqa(callback: CallbackQuery, bot: Bot):
+    await _night_target_handler(callback, bot, Role.MASHUQA, "mashuqa_target")
+
+async def handle_night_kamikaze(callback: CallbackQuery, bot: Bot):
+    await _night_target_handler(callback, bot, Role.KAMIKAZE, "kamikaze_target")
+
+async def handle_night_buqalamun(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 3:
+        return
+    team = parts[1]
+    chat_id = int(parts[2])
+    user_id = callback.from_user.id
+    if chat_id not in games:
+        return
+    game = games[chat_id]
+    if game.phase != GamePhase.NIGHT:
+        return
+    player = game.get_player(user_id)
+    if not player or player.role != Role.BUQALAMUN or not player.alive:
+        return
+    player.buqalamun_team = team
+    await callback.answer(f"✅ Jamoangiz: {team}", show_alert=True)
+    game.action_ready[user_id] = True
+
+async def handle_night_suidsid(callback: CallbackQuery, bot: Bot):
+    await _night_target_handler(callback, bot, Role.SUIDSID, "suidsid_target")
+
+async def handle_night_kimyogar(callback: CallbackQuery, bot: Bot):
+    await callback.answer()
+    data = callback.data
+    parts = data.split(":")
+    if len(parts) < 4:
+        return
+    action = parts[1]
+    target_id = int(parts[2])
+    chat_id = int(parts[3])
+    user_id = callback.from_user.id
+    if chat_id not in games:
+        return
+    game = games[chat_id]
+    if game.phase != GamePhase.NIGHT:
+        return
+    player = game.get_player(user_id)
+    if not player or player.role != Role.KIMYOGAR or not player.alive:
+        return
+    target = game.get_player(target_id)
+    if not target or not target.alive:
+        return
+    if action == "poison":
+        player.kimyogar_poison = target_id
+        await callback.answer(f"☠️ {target.display} ga zahar berildi!")
+    else:
+        player.kimyogar_heal = target_id
+        await callback.answer(f"💊 {target.display} ga dori berildi!")
+    game.action_ready[user_id] = True
 
 async def handle_day_vote(callback: CallbackQuery, bot: Bot):
     await callback.answer()
@@ -923,6 +989,7 @@ async def show_shop(callback: CallbackQuery, bot: Bot):
     text = get_shop_text(user_id)
     kb = make_inline_keyboard([
         [InlineKeyboardButton(text="🛒 Sotib olish", callback_data="shop_buy")],
+        [InlineKeyboardButton(text="⭐ Stars bilan to'lov", callback_data="pay_stars")],
         [InlineKeyboardButton(text="◀️ Ortga", callback_data="start_back")],
     ])
     await safe_edit_message(bot, callback.message.chat.id, callback.message.message_id, text, reply_markup=kb)

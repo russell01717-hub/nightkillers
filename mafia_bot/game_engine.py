@@ -506,12 +506,78 @@ async def start_night_phase(game: MafiaGame, bot: Bot):
             else:
                 await safe_send_message(bot, player.user_id, f"❓ O'liklar orasida maxsus rol yo'q.")
                 game.action_ready[player.user_id] = True
-        elif role in (Role.TINCH, Role.MER):
-            await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nSiz uxlayapsiz...")
-            game.action_ready[player.user_id] = True
-        else:
-            await safe_send_message(bot, player.user_id, f"🌙 <b>{game.day}-tun</b>\n\nKutib turing...")
-            game.action_ready[player.user_id] = True
+        elif role == Role.MASHUQA:
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            if targets:
+                kb = make_players_keyboard(targets, "nv_mashuqa", chat_id=cid)
+                await safe_send_message(
+                    bot, player.user_id,
+                    f"💃 <b>{game.day}-tun</b>\n\nKimni sevgiligingiz qilib tanlaysiz?",
+                    reply_markup=kb
+                )
+                game.action_ready[player.user_id] = False
+            else:
+                await safe_send_message(bot, player.user_id, f"🌙 Hech kim yo'q.")
+                game.action_ready[player.user_id] = True
+        elif role == Role.KAMIKAZE:
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            if targets:
+                kb = make_players_keyboard(targets, "nv_kamikaze", chat_id=cid)
+                await safe_send_message(
+                    bot, player.user_id,
+                    f"💣 <b>{game.day}-tun</b>\n\nKimni o'ldirasiz? (Siz ham o'larsiz)",
+                    reply_markup=kb
+                )
+                game.action_ready[player.user_id] = False
+            else:
+                await safe_send_message(bot, player.user_id, f"🌙 Hech kim yo'q.")
+                game.action_ready[player.user_id] = True
+        elif role == Role.BUQALAMUN:
+            kb = make_inline_keyboard([
+                [InlineKeyboardButton(text="🟢 Shahar", callback_data=f"nv_buqalamun:town:{cid}"),
+                 InlineKeyboardButton(text="🔴 Mafia", callback_data=f"nv_buqalamun:mafia:{cid}")],
+                [InlineKeyboardButton(text="🟣 Mustaqil", callback_data=f"nv_buqalamun:neutral:{cid}")]
+            ])
+            await safe_send_message(
+                bot, player.user_id,
+                f"🦎 <b>{game.day}-tun</b>\n\nO'z jamoangizni tanlang:",
+                reply_markup=kb
+            )
+            game.action_ready[player.user_id] = False
+        elif role == Role.SUIDSID:
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            if targets:
+                kb = make_players_keyboard(targets, "nv_suidsid", chat_id=cid)
+                await safe_send_message(
+                    bot, player.user_id,
+                    f"🧌 <b>{game.day}-tun</b>\n\nKimni o'ldirasiz? (Siz ham o'larsiz)",
+                    reply_markup=kb
+                )
+                game.action_ready[player.user_id] = False
+            else:
+                await safe_send_message(bot, player.user_id, f"🌙 Hech kim yo'q.")
+                game.action_ready[player.user_id] = True
+        elif role == Role.KIMYOGAR:
+            targets = [p for p in game.alive_players if p.user_id != player.user_id]
+            if targets:
+                kb = make_inline_keyboard([
+                    [InlineKeyboardButton(text="☠️ Zahar", callback_data=f"nv_kimyogar:poison:{cid}"),
+                     InlineKeyboardButton(text="💊 Dori", callback_data=f"nv_kimyogar:heal:{cid}")]
+                ])
+                for target in targets:
+                    kb.inline_keyboard.append([
+                        InlineKeyboardButton(text=f"{target.display}", callback_data=f"nv_kimyogar:poison:{target.user_id}:{cid}"),
+                        InlineKeyboardButton(text=f"{target.display}", callback_data=f"nv_kimyogar:heal:{target.user_id}:{cid}")
+                    ])
+                await safe_send_message(
+                    bot, player.user_id,
+                    f"👨‍🔬 <b>{game.day}-tun</b>\n\nKimga zahar/dori berasiz?",
+                    reply_markup=kb
+                )
+                game.action_ready[player.user_id] = False
+            else:
+                await safe_send_message(bot, player.user_id, f"🌙 Hech kim yo'q.")
+                game.action_ready[player.user_id] = True
 
 
     game.night_task = asyncio.create_task(night_timer(game, bot))
@@ -733,6 +799,45 @@ async def end_night_phase(game: MafiaGame, bot: Bot):
         game.bomber_planted_target = None
     if game.bomber_target is not None and game.bomber_target not in roleblocked:
         game.bomber_planted_target = game.bomber_target
+
+    # Kamikaze kill (dies with target)
+    if game.kamikaze_target is not None and game.kamikaze_target not in roleblocked:
+        kt = resolve_target(game.kamikaze_target)
+        target = game.get_player(kt)
+        if target and target.alive and kt not in results["protected"]:
+            target.alive = False
+            results["killed"].add(kt)
+        # Kamikaze also dies
+        kamikaze_player = next((p for p in game.alive_players if p.role == Role.KAMIKAZE), None)
+        if kamikaze_player:
+            kamikaze_player.alive = False
+            results["killed"].add(kamikaze_player.user_id)
+
+    # Suidsid kill (dies with target)
+    if game.suidsid_target is not None and game.suidsid_target not in roleblocked:
+        st = resolve_target(game.suidsid_target)
+        target = game.get_player(st)
+        if target and target.alive and st not in results["protected"]:
+            target.alive = False
+            results["killed"].add(st)
+        # Suidsid also dies
+        suidsid_player = next((p for p in game.alive_players if p.role == Role.SUIDSID), None)
+        if suidsid_player:
+            suidsid_player.alive = False
+            results["killed"].add(suidsid_player.user_id)
+
+    # Kimyogar poison/heal
+    if game.kimyogar_poison is not None:
+        pt = resolve_target(game.kimyogar_poison)
+        target = game.get_player(pt)
+        if target and target.alive and pt not in results["protected"]:
+            target.alive = False
+            results["killed"].add(pt)
+    if game.kimyogar_heal is not None:
+        ht = resolve_target(game.kimyogar_heal)
+        if ht not in roleblocked:
+            results["protected"].add(ht)
+            results["healed"].add(ht)
 
     # Poisoner — mark as poisoned, kills next morning
     if game.poisoned_player is not None:

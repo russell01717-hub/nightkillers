@@ -59,7 +59,7 @@ class Role(str, Enum):
     FORGER = "Forger"
     GODFATHER = "Godfather"
 
-    # ── Neutral ──
+# ── Neutral ──
     MANIYAK = "Maniyak"
     JOKER = "Joker"
     ARSONIST = "Arsonist"
@@ -72,24 +72,39 @@ class Role(str, Enum):
     POISONER = "Poisoner"
     PROFESSIONAL = "Professional"
 
+    # ── New: Bloody Mode roles ──
+    MASHUQA = "Mashuqa"
+    KAMIKAZE = "Kamikaze"
+    BUQALAMUN = "Buqalamun"
+    SUIDSID = "Suidsid"
+    KIMYOGAR = "Kimyogar"
+    SOTUVCHI = "Sotuvchi"
+    MAJNUN = "Majnun"
+
 
 ROLE_ICON = {
-    Role.TINCH: "👤", Role.KOMISSAR: "🔍", Role.DOKTOR: "💊",
+    Role.TINCH: "👨🏼", Role.KOMISSAR: "🕵🏼", Role.DOKTOR: "👨🏼‍⚕️",
     Role.QORIQCHI: "🛡", Role.KUZATUVCHI: "👁", Role.IZQUVAR: "🔎",
     Role.TERGOVCHI: "📋", Role.MER: "👔", Role.VETERAN: "🎖",
-    Role.VIGILANTE: "🔫", Role.HAMSHIRA: "🏥", Role.MEDIUM: "🔮",
-    Role.PSIXOLOG: "🧠", Role.MUHANDIS: "⚙️", Role.DETEKTIV: "🕵️",
-    Role.SPY: "🕶", Role.JAILOR: "⛓", Role.ORACLE: "🔯",
-    Role.PRIEST: "✝️", Role.TRANSPORTER: "🔄", Role.ADVOKAT: "⚖️",
-    Role.SHERIF: "⭐",
-    Role.MAFIA: "🔪", Role.DON: "👑", Role.CONSIGLIERE: "📜",
+    Role.VIGILANTE: "🔫", Role.HAMSHIRA: "👨🏼‍⚕️", Role.MEDIUM: "🔮",
+    Role.PSIXOLOG: "🧠", Role.MUHANDIS: "⚙️", Role.DETEKTIV: "🕵🏻‍♂️",
+    Role.SPY: "🕶", Role.JAILOR: "👮🏼", Role.ORACLE: "🔮",
+    Role.PRIEST: "✝️", Role.TRANSPORTER: "🔄", Role.ADVOKAT: "👨🏼‍💼",
+    Role.SHERIF: "👮🏼",
+    Role.MAFIA: "🤵🏼", Role.DON: "🤵🏻", Role.CONSIGLIERE: "🤵🏻‍♀️",
     Role.FRAMER: "🎭", Role.JANITOR: "🧹", Role.SILENCER: "🤐",
     Role.BLACKMAILER: "📨", Role.ROLEBLOCKER: "🔒", Role.FORGER: "✒️",
     Role.GODFATHER: "💀",
-    Role.MANIYAK: "🪓", Role.JOKER: "🃏", Role.ARSONIST: "🔥",
-    Role.EXECUTIONER: "🪓", Role.WITCH: "🧙", Role.SURVIVOR: "⛺",
-    Role.AMNESIAC: "❓", Role.ASSASSIN: "🗡", Role.BOMBER: "💣",
-    Role.POISONER: "☠️", Role.PROFESSIONAL: "🎯",
+    Role.MANIYAK: "🔪", Role.JOKER: "🤹🏻", Role.ARSONIST: "💣",
+    Role.EXECUTIONER: "💣", Role.WITCH: "🧙", Role.SURVIVOR: "🤞🏼",
+    Role.AMNESIAC: "❓", Role.ASSASSIN: "🥷", Role.BOMBER: "💣",
+    Role.POISONER: "🧙", Role.PROFESSIONAL: "👨‍🔬",
+
+    # ── Bloody Mode ──
+    Role.MASHUQA: "💃", Role.KAMIKAZE: "💣",
+    Role.BUQALAMUN: "🦎", Role.SUIDSID: "🧌",
+    Role.KIMYOGAR: "👨‍🔬", Role.SOTUVCHI: "🎁",
+    Role.MAJNUN: "🕺",
 }
 
 ROLE_DISPLAY = {r: f"{ROLE_ICON.get(r, '❓')} {r.value}" for r in Role}
@@ -111,6 +126,10 @@ ROLE_TEAM = {
     Role.EXECUTIONER: "neutral", Role.WITCH: "neutral", Role.SURVIVOR: "neutral",
     Role.AMNESIAC: "neutral", Role.ASSASSIN: "neutral", Role.BOMBER: "neutral",
     Role.POISONER: "neutral", Role.PROFESSIONAL: "neutral",
+    Role.MASHUQA: "town", Role.KAMIKAZE: "neutral",
+    Role.BUQALAMUN: "neutral", Role.SUIDSID: "neutral",
+    Role.KIMYOGAR: "town", Role.SOTUVCHI: "town",
+    Role.MAJNUN: "neutral",
 }
 
 ROLE_DESC = {
@@ -157,6 +176,13 @@ ROLE_DESC = {
     Role.BOMBER: "Kechasi bir o'yinchining uyiga bomba o'rnatasiz. Keyingi tun portlaydi.",
     Role.POISONER: "Kechasi bir o'yinchini zaharlaysiz. U ertasi kuni o'ladi.",
     Role.PROFESSIONAL: "Kechasi bir o'yinchini o'ldirasiz. Agar noto'g'ri o'ldirsangiz, o'zingiz o'lasiz.",
+    Role.MASHUQA: "Kechasi bir o'yinchini tanlaysiz. Siz ikkalasi ham tirik qolasiz, bitta o'lsa ikkalasi o'ladi.",
+    Role.KAMIKAZE: "Kechasi bir o'yinchini tanlaysiz. Siz o'ldirasiz, lekin siz ham o'larsiz.",
+    Role.BUQALAMUN: "Kechasi o'z jamoasini tanlaysiz: Shahar, Mafiya yoki Mustaqil.",
+    Role.SUIDSID: "Kechasi bir o'yinchini tanlaysiz. Siz ham o'larsiz, lekin o'sha odam ham o'ladi.",
+    Role.KIMYOGAR: "Kechasi bir o'yinchiga zahar yoki dori berasiz. Agar zahar — o'ladi, dori — davolanadi.",
+    Role.SOTUVCHI: "Kunduzi do'kondan item sotishingiz mumkin. Har kuni bir marta.",
+    Role.MAJNUN: "Kunduzi ovoz berish orqali chiqarilishni xohlaysiz. Chiqarilsangiz yutasiz.",
 }
 
 ROLE_PRICES = {
@@ -172,6 +198,8 @@ ROLE_PRICES = {
     Role.MANIYAK: 100, Role.JOKER: 20, Role.ARSONIST: 90, Role.EXECUTIONER: 30,
     Role.WITCH: 70, Role.SURVIVOR: 25, Role.AMNESIAC: 40, Role.ASSASSIN: 80,
     Role.BOMBER: 75, Role.POISONER: 70, Role.PROFESSIONAL: 85,
+    Role.MASHUQA: 60, Role.KAMIKAZE: 90, Role.BUQALAMUN: 100, Role.SUIDSID: 95,
+    Role.KIMYOGAR: 70, Role.SOTUVCHI: 50, Role.MAJNUN: 20,
 }
 
 TOWN_ROLES = [r for r in Role if ROLE_TEAM[r] == "town"]
@@ -195,6 +223,9 @@ IS_NIGHT_ACTIVE = {
     Role.EXECUTIONER: False, Role.WITCH: True, Role.SURVIVOR: False,
     Role.AMNESIAC: True, Role.ASSASSIN: True, Role.BOMBER: True,
     Role.POISONER: True, Role.PROFESSIONAL: True,
+    Role.MASHUQA: False, Role.KAMIKAZE: True, Role.BUQALAMUN: False,
+    Role.SUIDSID: True, Role.KIMYOGAR: True, Role.SOTUVCHI: False,
+    Role.MAJNUN: False,
 }
 
 
@@ -305,4 +336,11 @@ ROLE_PRIORITY_MAP = {
     Role.FRAMER: ActionPriority.LAST,
     Role.JANITOR: ActionPriority.LAST,
     Role.FORGER: ActionPriority.LAST,
+    Role.MASHUQA: ActionPriority.LAST,
+    Role.KAMIKAZE: ActionPriority.KILL,
+    Role.BUQALAMUN: ActionPriority.LAST,
+    Role.SUIDSID: ActionPriority.KILL,
+    Role.KIMYOGAR: ActionPriority.KILL,
+    Role.SOTUVCHI: ActionPriority.LAST,
+    Role.MAJNUN: ActionPriority.LAST,
 }

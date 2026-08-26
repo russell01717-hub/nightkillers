@@ -66,9 +66,11 @@ async def main():
 
     from mafia_bot.handlers.commands import register as register_commands
     from mafia_bot.handlers.callbacks import register as register_callbacks
+    from mafia_bot.handlers.payments import router as payments_router
 
     register_commands(dp, bot)
     register_callbacks(dp, bot)
+    dp.include_router(payments_router)
 
     init_db()
 

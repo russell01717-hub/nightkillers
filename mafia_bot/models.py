@@ -159,6 +159,14 @@ class MafiaGame:
     bomber_planted_target: Optional[int] = None
     poisoned_player: Optional[int] = None
 
+    # Bloody Mode night targets
+    mashuqa_target: Optional[int] = None
+    kamikaze_target: Optional[int] = None
+    buqalamun_team: Optional[str] = None
+    suidsid_target: Optional[int] = None
+    kimyogar_poison: Optional[int] = None
+    kimyogar_heal: Optional[int] = None
+
     def __post_init__(self):
         self.game_id = f"G{self.chat_id}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         from .db import get_chat_setting
@@ -249,6 +257,14 @@ class MafiaGame:
         self.forger_target = None
         self.kill_targets = []
         self.healed_player = None
+        self.revived_player = None
+        self.advokat_protect = None
+        self.mashuqa_target = None
+        self.kamikaze_target = None
+        self.buqalamun_team = None
+        self.suidsid_target = None
+        self.kimyogar_poison = None
+        self.kimyogar_heal = None
         self.revived_player = None
         self.advokat_protect = None
         self.executioner_target = None
